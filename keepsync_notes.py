@@ -35,6 +35,9 @@ def install_dependencies():
         "gkeepapi": ("gkeepapi", "Google Keep sync", False),  # Optional
         "gpsoauth": ("gpsoauth", "Google auth tokens", False),  # Optional, for token generation
         "browser-cookie3": ("browser_cookie3", "Browser cookie extraction", False),  # Optional
+        "PyGithub": ("github", "GitHub API client", False),  # Optional, for GitHub sync
+        "google-api-python-client": ("googleapiclient", "Google API client", False),  # Optional, for Drive sync
+        "google-auth-oauthlib": ("google_auth_oauthlib", "Google OAuth", False),  # Optional, for Drive sync
     }
     
     # Check for tkinter (system package, can't pip install)
@@ -1363,6 +1366,593 @@ class KeepWebScraper:
         
         return imported, errors
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLOUD SYNC PROVIDERS (Google Drive & GitHub)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class CloudSyncProvider:
+    """Base class for cloud sync providers"""
+    
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+        self.is_connected = False
+        self.last_sync: Optional[datetime] = None
+        self.sync_callbacks: List[Callable] = []
+    
+    def add_callback(self, callback: Callable):
+        self.sync_callbacks.append(callback)
+    
+    def _notify(self, status: str, message: str):
+        for cb in self.sync_callbacks:
+            try:
+                cb(status, message)
+            except:
+                pass
+    
+    def connect(self, **kwargs) -> tuple[bool, str]:
+        raise NotImplementedError
+    
+    def disconnect(self):
+        raise NotImplementedError
+    
+    def sync(self) -> tuple[bool, str, dict]:
+        raise NotImplementedError
+    
+    def get_provider_name(self) -> str:
+        raise NotImplementedError
+
+
+class GoogleDriveSync(CloudSyncProvider):
+    """
+    Sync notes to Google Drive as JSON files.
+    Uses a dedicated folder to store all notes.
+    """
+    
+    FOLDER_NAME = "KeepSync Notes Backup"
+    NOTES_FILE = "notes_backup.json"
+    SCOPES = ['https://www.googleapis.com/auth/drive.file']
+    
+    def __init__(self, db: DatabaseManager):
+        super().__init__(db)
+        self.service = None
+        self.folder_id = None
+        self.creds = None
+    
+    def get_provider_name(self) -> str:
+        return "Google Drive"
+    
+    def connect(self, credentials_path: str = None, token_path: str = None) -> tuple[bool, str]:
+        """
+        Connect to Google Drive using OAuth credentials.
+        
+        Args:
+            credentials_path: Path to OAuth client credentials JSON (from Google Cloud Console)
+            token_path: Path to store/load the user's auth token
+        """
+        try:
+            # Install required packages
+            try:
+                from google.oauth2.credentials import Credentials
+                from google_auth_oauthlib.flow import InstalledAppFlow
+                from google.auth.transport.requests import Request
+                from googleapiclient.discovery import build
+                from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+            except ImportError:
+                import subprocess
+                import sys
+                subprocess.run([
+                    sys.executable, "-m", "pip", "install", 
+                    "google-auth", "google-auth-oauthlib", "google-api-python-client",
+                    "--break-system-packages", "-q"
+                ], capture_output=True)
+                
+                from google.oauth2.credentials import Credentials
+                from google_auth_oauthlib.flow import InstalledAppFlow
+                from google.auth.transport.requests import Request
+                from googleapiclient.discovery import build
+            
+            # Default paths
+            if not token_path:
+                token_path = str(Path.home() / ".keepsync_notes" / "gdrive_token.json")
+            if not credentials_path:
+                credentials_path = str(Path.home() / ".keepsync_notes" / "gdrive_credentials.json")
+            
+            creds = None
+            
+            # Load existing token
+            if os.path.exists(token_path):
+                creds = Credentials.from_authorized_user_file(token_path, self.SCOPES)
+            
+            # Refresh or get new credentials
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                else:
+                    if not os.path.exists(credentials_path):
+                        return False, (
+                            "Google Drive credentials not found.\n\n"
+                            "To set up Google Drive sync:\n"
+                            "1. Go to console.cloud.google.com\n"
+                            "2. Create a project and enable Drive API\n"
+                            "3. Create OAuth credentials (Desktop app)\n"
+                            "4. Download and save as:\n"
+                            f"   {credentials_path}"
+                        )
+                    
+                    flow = InstalledAppFlow.from_client_secrets_file(credentials_path, self.SCOPES)
+                    creds = flow.run_local_server(port=0)
+                
+                # Save token for next time
+                os.makedirs(os.path.dirname(token_path), exist_ok=True)
+                with open(token_path, 'w') as f:
+                    f.write(creds.to_json())
+            
+            self.creds = creds
+            self.service = build('drive', 'v3', credentials=creds)
+            
+            # Find or create our folder
+            self._ensure_folder()
+            
+            self.is_connected = True
+            self.db.set_setting("cloud_provider", "gdrive")
+            self._notify("connected", "Connected to Google Drive")
+            
+            return True, "Connected to Google Drive successfully"
+            
+        except Exception as e:
+            return False, f"Google Drive connection failed: {str(e)}"
+    
+    def _ensure_folder(self):
+        """Find or create the backup folder in Google Drive"""
+        # Search for existing folder
+        results = self.service.files().list(
+            q=f"name='{self.FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+            spaces='drive',
+            fields='files(id, name)'
+        ).execute()
+        
+        files = results.get('files', [])
+        
+        if files:
+            self.folder_id = files[0]['id']
+        else:
+            # Create folder
+            file_metadata = {
+                'name': self.FOLDER_NAME,
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            folder = self.service.files().create(body=file_metadata, fields='id').execute()
+            self.folder_id = folder.get('id')
+    
+    def disconnect(self):
+        """Disconnect from Google Drive"""
+        self.service = None
+        self.creds = None
+        self.folder_id = None
+        self.is_connected = False
+        self.db.set_setting("cloud_provider", None)
+        self._notify("disconnected", "Disconnected from Google Drive")
+    
+    def sync(self) -> tuple[bool, str, dict]:
+        """
+        Sync notes with Google Drive.
+        Uses a single JSON file containing all notes.
+        """
+        if not self.is_connected or not self.service:
+            return False, "Not connected to Google Drive", {}
+        
+        stats = {"uploaded": 0, "downloaded": 0, "conflicts": 0}
+        
+        try:
+            self._notify("syncing", "Syncing with Google Drive...")
+            
+            # Get local notes
+            local_notes = self.db.get_all_notes(include_archived=True, include_trashed=False)
+            local_data = {
+                "version": DB_VERSION,
+                "synced_at": datetime.now(timezone.utc).isoformat(),
+                "notes": [n.to_dict() for n in local_notes],
+                "labels": [l.to_dict() for l in self.db.get_all_labels()]
+            }
+            
+            # Check for existing backup file
+            results = self.service.files().list(
+                q=f"name='{self.NOTES_FILE}' and '{self.folder_id}' in parents and trashed=false",
+                spaces='drive',
+                fields='files(id, name, modifiedTime)'
+            ).execute()
+            
+            remote_files = results.get('files', [])
+            
+            if remote_files:
+                # Download and merge with remote
+                file_id = remote_files[0]['id']
+                remote_modified = remote_files[0].get('modifiedTime')
+                
+                # Download remote file
+                import io
+                from googleapiclient.http import MediaIoBaseDownload
+                
+                request = self.service.files().get_media(fileId=file_id)
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+                
+                fh.seek(0)
+                remote_data = json.loads(fh.read().decode('utf-8'))
+                
+                # Merge: remote notes that don't exist locally
+                local_ids = {n.id for n in local_notes}
+                for remote_note in remote_data.get("notes", []):
+                    if remote_note["id"] not in local_ids:
+                        note = Note.from_dict(remote_note)
+                        self.db.save_note(note)
+                        stats["downloaded"] += 1
+                
+                # Update the file with merged data
+                local_notes = self.db.get_all_notes(include_archived=True, include_trashed=False)
+                local_data["notes"] = [n.to_dict() for n in local_notes]
+            
+            # Upload merged data
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(local_data, f, indent=2)
+                temp_path = f.name
+            
+            from googleapiclient.http import MediaFileUpload
+            media = MediaFileUpload(temp_path, mimetype='application/json')
+            
+            if remote_files:
+                # Update existing file
+                self.service.files().update(
+                    fileId=remote_files[0]['id'],
+                    media_body=media
+                ).execute()
+            else:
+                # Create new file
+                file_metadata = {
+                    'name': self.NOTES_FILE,
+                    'parents': [self.folder_id]
+                }
+                self.service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id'
+                ).execute()
+            
+            os.unlink(temp_path)
+            stats["uploaded"] = len(local_notes)
+            
+            self.last_sync = datetime.now(timezone.utc)
+            self.db.set_setting("gdrive_last_sync", self.last_sync.isoformat())
+            
+            self._notify("synced", f"Drive sync: ↑{stats['uploaded']} ↓{stats['downloaded']}")
+            return True, "Sync completed", stats
+            
+        except Exception as e:
+            self._notify("error", f"Sync error: {str(e)}")
+            return False, f"Sync error: {str(e)}", stats
+
+
+class GitHubSync(CloudSyncProvider):
+    """
+    Sync notes to a private GitHub repository.
+    Stores notes as individual JSON files for better version history.
+    """
+    
+    NOTES_DIR = "notes"
+    LABELS_FILE = "labels.json"
+    METADATA_FILE = "metadata.json"
+    
+    def __init__(self, db: DatabaseManager):
+        super().__init__(db)
+        self.token = None
+        self.repo_name = None
+        self.repo = None
+        self.github = None
+    
+    def get_provider_name(self) -> str:
+        return "GitHub"
+    
+    def connect(self, token: str, repo_name: str, create_if_missing: bool = True) -> tuple[bool, str]:
+        """
+        Connect to GitHub and set up the notes repository.
+        
+        Args:
+            token: GitHub Personal Access Token (needs 'repo' scope)
+            repo_name: Repository name (e.g., 'my-notes-backup')
+            create_if_missing: Create repo if it doesn't exist
+        """
+        try:
+            # Install PyGithub if needed
+            try:
+                from github import Github, GithubException
+            except ImportError:
+                import subprocess
+                import sys
+                subprocess.run([
+                    sys.executable, "-m", "pip", "install", "PyGithub",
+                    "--break-system-packages", "-q"
+                ], capture_output=True)
+                from github import Github, GithubException
+            
+            self.github = Github(token)
+            self.token = token
+            self.repo_name = repo_name
+            
+            # Get authenticated user
+            user = self.github.get_user()
+            
+            # Find or create repo
+            try:
+                self.repo = user.get_repo(repo_name)
+            except GithubException as e:
+                if e.status == 404 and create_if_missing:
+                    # Create private repo
+                    self.repo = user.create_repo(
+                        repo_name,
+                        description="KeepSync Notes Backup - Auto-synced notes",
+                        private=True,
+                        auto_init=True
+                    )
+                else:
+                    return False, f"Repository '{repo_name}' not found"
+            
+            # Verify repo is accessible
+            try:
+                self.repo.get_contents("")
+            except GithubException:
+                # Empty repo, initialize it
+                self.repo.create_file(
+                    "README.md",
+                    "Initial commit",
+                    f"# {repo_name}\n\nKeepSync Notes Backup - Auto-synced notes\n"
+                )
+            
+            self.is_connected = True
+            self.db.set_setting("cloud_provider", "github")
+            self.db.set_setting("github_repo", repo_name)
+            # Don't store token in plain text - user needs to re-enter
+            
+            self._notify("connected", f"Connected to GitHub: {repo_name}")
+            return True, f"Connected to GitHub repository: {repo_name}"
+            
+        except Exception as e:
+            return False, f"GitHub connection failed: {str(e)}"
+    
+    def disconnect(self):
+        """Disconnect from GitHub"""
+        self.github = None
+        self.repo = None
+        self.token = None
+        self.is_connected = False
+        self.db.set_setting("cloud_provider", None)
+        self._notify("disconnected", "Disconnected from GitHub")
+    
+    def sync(self) -> tuple[bool, str, dict]:
+        """
+        Sync notes with GitHub repository.
+        Each note is stored as a separate JSON file for better git history.
+        """
+        if not self.is_connected or not self.repo:
+            return False, "Not connected to GitHub", {}
+        
+        stats = {"uploaded": 0, "downloaded": 0, "conflicts": 0}
+        
+        try:
+            from github import GithubException
+            
+            self._notify("syncing", "Syncing with GitHub...")
+            
+            # Get local notes
+            local_notes = self.db.get_all_notes(include_archived=True, include_trashed=False)
+            local_notes_dict = {n.id: n for n in local_notes}
+            
+            # Get remote notes
+            remote_notes = {}
+            try:
+                contents = self.repo.get_contents(self.NOTES_DIR)
+                for content in contents:
+                    if content.name.endswith('.json'):
+                        note_data = json.loads(content.decoded_content.decode('utf-8'))
+                        remote_notes[note_data['id']] = (note_data, content.sha)
+            except GithubException as e:
+                if e.status != 404:  # 404 means folder doesn't exist yet
+                    raise
+            
+            # Download new remote notes
+            for note_id, (note_data, sha) in remote_notes.items():
+                if note_id not in local_notes_dict:
+                    note = Note.from_dict(note_data)
+                    self.db.save_note(note)
+                    stats["downloaded"] += 1
+            
+            # Upload local notes
+            for note in local_notes:
+                note_filename = f"{self.NOTES_DIR}/{note.id}.json"
+                note_content = json.dumps(note.to_dict(), indent=2)
+                
+                try:
+                    if note.id in remote_notes:
+                        # Update existing
+                        _, sha = remote_notes[note.id]
+                        remote_data = remote_notes[note.id][0]
+                        
+                        # Only update if local is newer
+                        if note.updated_at.isoformat() > remote_data.get('updated_at', ''):
+                            self.repo.update_file(
+                                note_filename,
+                                f"Update note: {note.title[:50]}",
+                                note_content,
+                                sha
+                            )
+                            stats["uploaded"] += 1
+                    else:
+                        # Create new
+                        self.repo.create_file(
+                            note_filename,
+                            f"Add note: {note.title[:50]}",
+                            note_content
+                        )
+                        stats["uploaded"] += 1
+                except GithubException as e:
+                    if e.status == 409:  # Conflict
+                        stats["conflicts"] += 1
+                    else:
+                        raise
+            
+            # Upload labels
+            labels = self.db.get_all_labels()
+            labels_content = json.dumps([l.to_dict() for l in labels], indent=2)
+            try:
+                contents = self.repo.get_contents(self.LABELS_FILE)
+                self.repo.update_file(
+                    self.LABELS_FILE,
+                    "Update labels",
+                    labels_content,
+                    contents.sha
+                )
+            except GithubException:
+                self.repo.create_file(
+                    self.LABELS_FILE,
+                    "Add labels",
+                    labels_content
+                )
+            
+            # Update metadata
+            metadata = {
+                "last_sync": datetime.now(timezone.utc).isoformat(),
+                "note_count": len(local_notes),
+                "app_version": APP_VERSION
+            }
+            metadata_content = json.dumps(metadata, indent=2)
+            try:
+                contents = self.repo.get_contents(self.METADATA_FILE)
+                self.repo.update_file(
+                    self.METADATA_FILE,
+                    "Update sync metadata",
+                    metadata_content,
+                    contents.sha
+                )
+            except GithubException:
+                self.repo.create_file(
+                    self.METADATA_FILE,
+                    "Add sync metadata",
+                    metadata_content
+                )
+            
+            self.last_sync = datetime.now(timezone.utc)
+            self.db.set_setting("github_last_sync", self.last_sync.isoformat())
+            
+            self._notify("synced", f"GitHub sync: ↑{stats['uploaded']} ↓{stats['downloaded']}")
+            return True, "Sync completed", stats
+            
+        except Exception as e:
+            self._notify("error", f"Sync error: {str(e)}")
+            return False, f"Sync error: {str(e)}", stats
+
+
+class CloudSyncManager:
+    """
+    Manages cloud sync providers and auto-sync functionality.
+    """
+    
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+        self.providers: Dict[str, CloudSyncProvider] = {
+            "gdrive": GoogleDriveSync(db),
+            "github": GitHubSync(db),
+        }
+        self.active_provider: Optional[CloudSyncProvider] = None
+        self.auto_sync_thread: Optional[threading.Thread] = None
+        self._stop_sync = threading.Event()
+        self.sync_callbacks: List[Callable] = []
+    
+    def add_callback(self, callback: Callable):
+        """Add callback for sync status updates"""
+        self.sync_callbacks.append(callback)
+        for provider in self.providers.values():
+            provider.add_callback(callback)
+    
+    def get_provider(self, name: str) -> Optional[CloudSyncProvider]:
+        """Get a sync provider by name"""
+        return self.providers.get(name)
+    
+    def set_active_provider(self, name: str) -> bool:
+        """Set the active sync provider"""
+        if name in self.providers:
+            self.active_provider = self.providers[name]
+            return True
+        return False
+    
+    def connect_gdrive(self, credentials_path: str = None) -> tuple[bool, str]:
+        """Connect to Google Drive"""
+        provider = self.providers["gdrive"]
+        success, message = provider.connect(credentials_path=credentials_path)
+        if success:
+            self.active_provider = provider
+        return success, message
+    
+    def connect_github(self, token: str, repo_name: str) -> tuple[bool, str]:
+        """Connect to GitHub"""
+        provider = self.providers["github"]
+        success, message = provider.connect(token=token, repo_name=repo_name)
+        if success:
+            self.active_provider = provider
+        return success, message
+    
+    def disconnect(self):
+        """Disconnect from active provider"""
+        if self.active_provider:
+            self.active_provider.disconnect()
+            self.active_provider = None
+    
+    def sync(self) -> tuple[bool, str, dict]:
+        """Sync with active provider"""
+        if not self.active_provider or not self.active_provider.is_connected:
+            return False, "No cloud provider connected", {}
+        return self.active_provider.sync()
+    
+    def start_auto_sync(self, interval_minutes: int = 15):
+        """Start automatic background sync"""
+        self._stop_sync.clear()
+        
+        def sync_loop():
+            while not self._stop_sync.is_set():
+                if self.active_provider and self.active_provider.is_connected:
+                    try:
+                        self.sync()
+                    except Exception as e:
+                        print(f"Auto-sync error: {e}")
+                self._stop_sync.wait(interval_minutes * 60)
+        
+        self.auto_sync_thread = threading.Thread(target=sync_loop, daemon=True)
+        self.auto_sync_thread.start()
+    
+    def stop_auto_sync(self):
+        """Stop automatic background sync"""
+        self._stop_sync.set()
+        if self.auto_sync_thread:
+            self.auto_sync_thread.join(timeout=1)
+    
+    def is_connected(self) -> bool:
+        """Check if any provider is connected"""
+        return self.active_provider is not None and self.active_provider.is_connected
+    
+    def get_status(self) -> dict:
+        """Get current sync status"""
+        if not self.active_provider:
+            return {"connected": False, "provider": None}
+        
+        return {
+            "connected": self.active_provider.is_connected,
+            "provider": self.active_provider.get_provider_name(),
+            "last_sync": self.active_provider.last_sync.isoformat() if self.active_provider.last_sync else None
+        }
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # UI COMPONENTS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2564,14 +3154,16 @@ class TokenGeneratorDialog(ctk.CTkToplevel):
 class SettingsDialog(ctk.CTkToplevel):
     """Settings dialog for Google Keep connection and app settings"""
     
-    def __init__(self, parent, db: DatabaseManager, sync_engine: KeepSyncEngine):
+    def __init__(self, parent, db: DatabaseManager, sync_engine: KeepSyncEngine, 
+                 cloud_sync: 'CloudSyncManager' = None):
         super().__init__(parent)
         
         self.db = db
         self.sync_engine = sync_engine
+        self.cloud_sync = cloud_sync
         
         self.title("Settings")
-        self.geometry("500x600")
+        self.geometry("550x700")
         self.configure(fg_color=COLORS["bg_dark"])
         
         # Center on parent
@@ -2582,290 +3174,19 @@ class SettingsDialog(ctk.CTkToplevel):
         self._load_settings()
     
     def _build_ui(self):
-        # Header
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=20, pady=20)
+        # Create tabview for different settings sections
+        self.tabview = ctk.CTkTabview(self, fg_color=COLORS["bg_dark"])
+        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
         
-        title = ctk.CTkLabel(
-            header,
-            text="Settings",
-            font=ctk.CTkFont(size=24, weight="bold"),
-            text_color=COLORS["text_primary"]
-        )
-        title.pack(anchor="w")
+        # Add tabs
+        self.tabview.add("☁️ Cloud Sync")
+        self.tabview.add("🔄 Google Keep")
+        self.tabview.add("📦 Data")
         
-        # Google Keep section
-        keep_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_medium"], corner_radius=12)
-        keep_frame.pack(fill="x", padx=20, pady=(0, 16))
-        
-        keep_header = ctk.CTkFrame(keep_frame, fg_color="transparent")
-        keep_header.pack(fill="x", padx=16, pady=(16, 8))
-        
-        ctk.CTkLabel(
-            keep_header,
-            text="Google Keep Integration",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=COLORS["text_primary"]
-        ).pack(side="left")
-        
-        self.connection_status = ctk.CTkLabel(
-            keep_header,
-            text="Disconnected",
-            font=ctk.CTkFont(size=12),
-            text_color=COLORS["accent_red"]
-        )
-        self.connection_status.pack(side="right")
-        
-        # Email
-        ctk.CTkLabel(
-            keep_frame,
-            text="Email",
-            font=ctk.CTkFont(size=12),
-            text_color=COLORS["text_secondary"]
-        ).pack(anchor="w", padx=16, pady=(8, 4))
-        
-        self.email_entry = ctk.CTkEntry(
-            keep_frame,
-            placeholder_text="your.email@gmail.com",
-            font=ctk.CTkFont(size=13),
-            height=40,
-            fg_color=COLORS["bg_dark"],
-            border_color=COLORS["border"]
-        )
-        self.email_entry.pack(fill="x", padx=16)
-        
-        # Master Token / App Password
-        token_label = ctk.CTkLabel(
-            keep_frame,
-            text="Master Token",
-            font=ctk.CTkFont(size=12),
-            text_color=COLORS["text_secondary"]
-        )
-        token_label.pack(anchor="w", padx=16, pady=(12, 4))
-        
-        self.token_entry = ctk.CTkEntry(
-            keep_frame,
-            placeholder_text="Paste your master token here",
-            font=ctk.CTkFont(size=13),
-            height=40,
-            fg_color=COLORS["bg_dark"],
-            border_color=COLORS["border"],
-            show="•"
-        )
-        self.token_entry.pack(fill="x", padx=16)
-        
-        # Get Token button
-        get_token_btn = ctk.CTkButton(
-            keep_frame,
-            text="🔑 Get Master Token",
-            font=ctk.CTkFont(size=12),
-            height=32,
-            fg_color=COLORS["accent_blue"],
-            hover_color=COLORS["accent_blue_hover"],
-            text_color=COLORS["bg_darkest"],
-            command=self._get_master_token
-        )
-        get_token_btn.pack(fill="x", padx=16, pady=(8, 0))
-        
-        # Help text
-        help_text = ctk.CTkLabel(
-            keep_frame,
-            text="Google requires a Master Token (not an App Password).\n"
-                 "Click 'Get Master Token' to generate one.",
-            font=ctk.CTkFont(size=11),
-            text_color=COLORS["text_muted"],
-            justify="left"
-        )
-        help_text.pack(anchor="w", padx=16, pady=(8, 0))
-        
-        # Connect/Disconnect buttons
-        btn_frame = ctk.CTkFrame(keep_frame, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=16)
-        
-        self.connect_btn = ctk.CTkButton(
-            btn_frame,
-            text="Connect",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            height=40,
-            fg_color=COLORS["accent_green"],
-            hover_color=COLORS["accent_green_hover"],
-            text_color=COLORS["bg_darkest"],
-            command=self._connect_keep
-        )
-        self.connect_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        
-        self.disconnect_btn = ctk.CTkButton(
-            btn_frame,
-            text="Disconnect",
-            font=ctk.CTkFont(size=13),
-            height=40,
-            fg_color="transparent",
-            hover_color=COLORS["bg_hover"],
-            text_color=COLORS["accent_red"],
-            border_width=1,
-            border_color=COLORS["accent_red"],
-            command=self._disconnect_keep
-        )
-        self.disconnect_btn.pack(side="left", fill="x", expand=True)
-        
-        # Alternative: Browser Import
-        alt_frame = ctk.CTkFrame(keep_frame, fg_color="transparent")
-        alt_frame.pack(fill="x", padx=16, pady=(8, 16))
-        
-        ctk.CTkLabel(
-            alt_frame,
-            text="─── OR ───",
-            font=ctk.CTkFont(size=11),
-            text_color=COLORS["text_muted"]
-        ).pack(pady=(0, 8))
-        
-        browser_import_btn = ctk.CTkButton(
-            alt_frame,
-            text="🌐 Import from Browser Session",
-            font=ctk.CTkFont(size=12),
-            height=36,
-            fg_color=COLORS["bg_light"],
-            hover_color=COLORS["bg_hover"],
-            text_color=COLORS["text_primary"],
-            command=self._import_from_browser
-        )
-        browser_import_btn.pack(fill="x")
-        
-        ctk.CTkLabel(
-            alt_frame,
-            text="Uses your existing Google login in Chrome/Firefox/Edge.\nNo password needed - just be logged into Keep.",
-            font=ctk.CTkFont(size=10),
-            text_color=COLORS["text_muted"],
-            justify="left"
-        ).pack(anchor="w", pady=(4, 0))
-        
-        # Auto-sync settings
-        sync_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_medium"], corner_radius=12)
-        sync_frame.pack(fill="x", padx=20, pady=(0, 16))
-        
-        ctk.CTkLabel(
-            sync_frame,
-            text="Auto Sync",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=COLORS["text_primary"]
-        ).pack(anchor="w", padx=16, pady=(16, 8))
-        
-        self.auto_sync_var = ctk.BooleanVar(value=True)
-        auto_sync_check = ctk.CTkCheckBox(
-            sync_frame,
-            text="Enable automatic synchronization",
-            variable=self.auto_sync_var,
-            font=ctk.CTkFont(size=13),
-            text_color=COLORS["text_secondary"],
-            fg_color=COLORS["accent_blue"],
-            hover_color=COLORS["accent_blue_hover"]
-        )
-        auto_sync_check.pack(anchor="w", padx=16, pady=(0, 8))
-        
-        interval_frame = ctk.CTkFrame(sync_frame, fg_color="transparent")
-        interval_frame.pack(fill="x", padx=16, pady=(0, 16))
-        
-        ctk.CTkLabel(
-            interval_frame,
-            text="Sync interval (minutes):",
-            font=ctk.CTkFont(size=12),
-            text_color=COLORS["text_secondary"]
-        ).pack(side="left")
-        
-        self.sync_interval = ctk.CTkEntry(
-            interval_frame,
-            width=60,
-            height=32,
-            font=ctk.CTkFont(size=13),
-            fg_color=COLORS["bg_dark"],
-            border_color=COLORS["border"]
-        )
-        self.sync_interval.pack(side="left", padx=(8, 0))
-        self.sync_interval.insert(0, "5")
-        
-        # Data section
-        data_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_medium"], corner_radius=12)
-        data_frame.pack(fill="x", padx=20, pady=(0, 16))
-        
-        ctk.CTkLabel(
-            data_frame,
-            text="Data Management",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=COLORS["text_primary"]
-        ).pack(anchor="w", padx=16, pady=(16, 8))
-        
-        data_btn_frame = ctk.CTkFrame(data_frame, fg_color="transparent")
-        data_btn_frame.pack(fill="x", padx=16, pady=(0, 16))
-        
-        export_btn = ctk.CTkButton(
-            data_btn_frame,
-            text="Export Notes",
-            image=IconManager.get_icon("export", 16, COLORS["text_secondary"]),
-            font=ctk.CTkFont(size=13),
-            height=36,
-            fg_color="transparent",
-            hover_color=COLORS["bg_hover"],
-            text_color=COLORS["text_secondary"],
-            border_width=1,
-            border_color=COLORS["border"],
-            command=self._export_notes
-        )
-        export_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        
-        import_btn = ctk.CTkButton(
-            data_btn_frame,
-            text="Import Notes",
-            image=IconManager.get_icon("import", 16, COLORS["text_secondary"]),
-            font=ctk.CTkFont(size=13),
-            height=36,
-            fg_color="transparent",
-            hover_color=COLORS["bg_hover"],
-            text_color=COLORS["text_secondary"],
-            border_width=1,
-            border_color=COLORS["border"],
-            command=self._import_notes
-        )
-        import_btn.pack(side="left", fill="x", expand=True)
-        
-        # Takeout folder import
-        takeout_btn = ctk.CTkButton(
-            data_frame,
-            text="📦 Import from Google Takeout Folder",
-            font=ctk.CTkFont(size=12),
-            height=36,
-            fg_color=COLORS["accent_green"],
-            hover_color=COLORS["accent_green_hover"],
-            text_color=COLORS["bg_darkest"],
-            command=self._import_takeout_folder
-        )
-        takeout_btn.pack(fill="x", padx=16, pady=(8, 4))
-        
-        ctk.CTkLabel(
-            data_frame,
-            text="Select your extracted Takeout/Keep folder to import all notes",
-            font=ctk.CTkFont(size=10),
-            text_color=COLORS["text_muted"]
-        ).pack(anchor="w", padx=16, pady=(0, 16))
-        
-        # gkeepapi status
-        if not GKEEPAPI_AVAILABLE:
-            warning_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_medium"], corner_radius=12)
-            warning_frame.pack(fill="x", padx=20, pady=(0, 16))
-            
-            ctk.CTkLabel(
-                warning_frame,
-                text="⚠️ gkeepapi not installed",
-                font=ctk.CTkFont(size=14, weight="bold"),
-                text_color=COLORS["accent_yellow"]
-            ).pack(anchor="w", padx=16, pady=(12, 4))
-            
-            ctk.CTkLabel(
-                warning_frame,
-                text="Install with: pip install gkeepapi\nGoogle Keep sync is disabled until installed.",
-                font=ctk.CTkFont(size=12),
-                text_color=COLORS["text_muted"],
-                justify="left"
-            ).pack(anchor="w", padx=16, pady=(0, 12))
+        # Build each tab
+        self._build_cloud_sync_tab()
+        self._build_keep_tab()
+        self._build_data_tab()
         
         # Close button
         close_btn = ctk.CTkButton(
@@ -2878,66 +3199,617 @@ class SettingsDialog(ctk.CTkToplevel):
             text_color=COLORS["bg_darkest"],
             command=self.destroy
         )
-        close_btn.pack(fill="x", padx=20, pady=(0, 20))
+        close_btn.pack(fill="x", padx=20, pady=(0, 15))
+    
+    def _build_cloud_sync_tab(self):
+        """Build the Cloud Sync settings tab"""
+        tab = self.tabview.tab("☁️ Cloud Sync")
+        
+        # Scroll frame
+        scroll = ctk.CTkScrollableFrame(tab, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        
+        # Header
+        ctk.CTkLabel(
+            scroll,
+            text="Cloud Backup",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", pady=(10, 5))
+        
+        ctk.CTkLabel(
+            scroll,
+            text="Sync your notes to Google Drive or GitHub for backup",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_secondary"]
+        ).pack(anchor="w", pady=(0, 15))
+        
+        # Current status
+        status_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=10)
+        status_frame.pack(fill="x", pady=(0, 15))
+        
+        self.cloud_status_label = ctk.CTkLabel(
+            status_frame,
+            text="Not connected to any cloud service",
+            font=ctk.CTkFont(size=13),
+            text_color=COLORS["text_muted"]
+        )
+        self.cloud_status_label.pack(pady=15)
+        
+        # === GitHub Section ===
+        github_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
+        github_frame.pack(fill="x", pady=(0, 15))
+        
+        github_header = ctk.CTkFrame(github_frame, fg_color="transparent")
+        github_header.pack(fill="x", padx=16, pady=(16, 8))
+        
+        ctk.CTkLabel(
+            github_header,
+            text="🐙 GitHub Sync",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(side="left")
+        
+        ctk.CTkLabel(
+            github_header,
+            text="Recommended",
+            font=ctk.CTkFont(size=11),
+            text_color=COLORS["accent_green"]
+        ).pack(side="right")
+        
+        ctk.CTkLabel(
+            github_frame,
+            text="Store notes in a private GitHub repository with version history",
+            font=ctk.CTkFont(size=11),
+            text_color=COLORS["text_muted"]
+        ).pack(anchor="w", padx=16, pady=(0, 10))
+        
+        # GitHub Token
+        ctk.CTkLabel(
+            github_frame,
+            text="Personal Access Token",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_secondary"]
+        ).pack(anchor="w", padx=16, pady=(0, 4))
+        
+        self.github_token_entry = ctk.CTkEntry(
+            github_frame,
+            placeholder_text="ghp_xxxxxxxxxxxxxxxxxxxx",
+            font=ctk.CTkFont(size=12),
+            height=38,
+            fg_color=COLORS["bg_dark"],
+            border_color=COLORS["border"],
+            show="•"
+        )
+        self.github_token_entry.pack(fill="x", padx=16)
+        
+        # GitHub Repo
+        ctk.CTkLabel(
+            github_frame,
+            text="Repository Name",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_secondary"]
+        ).pack(anchor="w", padx=16, pady=(10, 4))
+        
+        self.github_repo_entry = ctk.CTkEntry(
+            github_frame,
+            placeholder_text="my-notes-backup",
+            font=ctk.CTkFont(size=12),
+            height=38,
+            fg_color=COLORS["bg_dark"],
+            border_color=COLORS["border"]
+        )
+        self.github_repo_entry.pack(fill="x", padx=16)
+        
+        # Help link
+        help_btn = ctk.CTkButton(
+            github_frame,
+            text="📖 How to get a GitHub token",
+            font=ctk.CTkFont(size=11),
+            height=28,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["accent_blue"],
+            anchor="w",
+            command=lambda: webbrowser.open("https://github.com/settings/tokens/new?description=KeepSync%20Notes&scopes=repo")
+        )
+        help_btn.pack(anchor="w", padx=12, pady=(4, 0))
+        
+        # Connect button
+        self.github_connect_btn = ctk.CTkButton(
+            github_frame,
+            text="Connect to GitHub",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            height=40,
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_hover"],
+            text_color=COLORS["bg_darkest"],
+            command=self._connect_github
+        )
+        self.github_connect_btn.pack(fill="x", padx=16, pady=(10, 16))
+        
+        # === Google Drive Section ===
+        gdrive_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
+        gdrive_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            gdrive_frame,
+            text="📁 Google Drive Sync",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+        
+        ctk.CTkLabel(
+            gdrive_frame,
+            text="Store notes in a Google Drive folder\nRequires OAuth setup (more complex)",
+            font=ctk.CTkFont(size=11),
+            text_color=COLORS["text_muted"],
+            justify="left"
+        ).pack(anchor="w", padx=16, pady=(0, 10))
+        
+        self.gdrive_connect_btn = ctk.CTkButton(
+            gdrive_frame,
+            text="Connect to Google Drive",
+            font=ctk.CTkFont(size=13),
+            height=40,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self._connect_gdrive
+        )
+        self.gdrive_connect_btn.pack(fill="x", padx=16, pady=(0, 8))
+        
+        gdrive_help = ctk.CTkButton(
+            gdrive_frame,
+            text="📖 Google Drive setup instructions",
+            font=ctk.CTkFont(size=11),
+            height=28,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["accent_blue"],
+            anchor="w",
+            command=self._show_gdrive_instructions
+        )
+        gdrive_help.pack(anchor="w", padx=12, pady=(0, 16))
+        
+        # === Auto-sync Settings ===
+        autosync_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
+        autosync_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            autosync_frame,
+            text="⏱️ Auto-Sync Settings",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+        
+        self.cloud_autosync_var = ctk.BooleanVar(value=True)
+        autosync_check = ctk.CTkCheckBox(
+            autosync_frame,
+            text="Enable automatic cloud sync",
+            variable=self.cloud_autosync_var,
+            font=ctk.CTkFont(size=13),
+            text_color=COLORS["text_secondary"],
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_hover"],
+            command=self._save_autosync_settings
+        )
+        autosync_check.pack(anchor="w", padx=16, pady=(0, 8))
+        
+        interval_frame = ctk.CTkFrame(autosync_frame, fg_color="transparent")
+        interval_frame.pack(fill="x", padx=16, pady=(0, 16))
+        
+        ctk.CTkLabel(
+            interval_frame,
+            text="Sync interval:",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_secondary"]
+        ).pack(side="left")
+        
+        self.cloud_sync_interval = ctk.CTkEntry(
+            interval_frame,
+            width=60,
+            height=32,
+            font=ctk.CTkFont(size=13),
+            fg_color=COLORS["bg_dark"],
+            border_color=COLORS["border"]
+        )
+        self.cloud_sync_interval.pack(side="left", padx=(8, 4))
+        self.cloud_sync_interval.insert(0, "15")
+        
+        ctk.CTkLabel(
+            interval_frame,
+            text="minutes",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_secondary"]
+        ).pack(side="left")
+        
+        # Disconnect button
+        self.cloud_disconnect_btn = ctk.CTkButton(
+            scroll,
+            text="Disconnect from Cloud",
+            font=ctk.CTkFont(size=13),
+            height=40,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["accent_red"],
+            border_width=1,
+            border_color=COLORS["accent_red"],
+            command=self._disconnect_cloud
+        )
+        # Initially hidden, shown when connected
+    
+    def _build_keep_tab(self):
+        """Build the Google Keep import tab"""
+        tab = self.tabview.tab("🔄 Google Keep")
+        
+        scroll = ctk.CTkScrollableFrame(tab, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        
+        # Header
+        ctk.CTkLabel(
+            scroll,
+            text="Import from Google Keep",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", pady=(10, 5))
+        
+        ctk.CTkLabel(
+            scroll,
+            text="One-time import to migrate your notes from Google Keep",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_secondary"]
+        ).pack(anchor="w", pady=(0, 15))
+        
+        # Takeout import (primary)
+        takeout_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
+        takeout_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            takeout_frame,
+            text="📦 Google Takeout Import",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", padx=16, pady=(16, 4))
+        
+        ctk.CTkLabel(
+            takeout_frame,
+            text="Recommended",
+            font=ctk.CTkFont(size=11),
+            text_color=COLORS["accent_green"]
+        ).pack(anchor="w", padx=16, pady=(0, 8))
+        
+        takeout_btn = ctk.CTkButton(
+            takeout_frame,
+            text="Import from Takeout Folder",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            height=40,
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_hover"],
+            text_color=COLORS["bg_darkest"],
+            command=self._import_takeout_folder
+        )
+        takeout_btn.pack(fill="x", padx=16, pady=(0, 8))
+        
+        takeout_help = ctk.CTkButton(
+            takeout_frame,
+            text="📖 How to export from Google Takeout",
+            font=ctk.CTkFont(size=11),
+            height=28,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["accent_blue"],
+            anchor="w",
+            command=lambda: TakeoutInstructionsDialog(self)
+        )
+        takeout_help.pack(anchor="w", padx=12, pady=(0, 16))
+        
+        # Browser import (alternative)
+        browser_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
+        browser_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            browser_frame,
+            text="🌐 Browser Session Import",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+        
+        ctk.CTkLabel(
+            browser_frame,
+            text="Extract notes using your browser's Google login\n(Close browser before using)",
+            font=ctk.CTkFont(size=11),
+            text_color=COLORS["text_muted"],
+            justify="left"
+        ).pack(anchor="w", padx=16, pady=(0, 10))
+        
+        browser_btn = ctk.CTkButton(
+            browser_frame,
+            text="Import from Browser",
+            font=ctk.CTkFont(size=13),
+            height=40,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self._import_from_browser
+        )
+        browser_btn.pack(fill="x", padx=16, pady=(0, 16))
+        
+        # Legacy gkeepapi (hidden, mostly broken)
+        legacy_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
+        legacy_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            legacy_frame,
+            text="🔑 API Token Method",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=COLORS["text_muted"]
+        ).pack(anchor="w", padx=16, pady=(16, 4))
+        
+        ctk.CTkLabel(
+            legacy_frame,
+            text="⚠️ Often blocked by Google - use Takeout instead",
+            font=ctk.CTkFont(size=11),
+            text_color=COLORS["accent_yellow"]
+        ).pack(anchor="w", padx=16, pady=(0, 16))
+    
+    def _build_data_tab(self):
+        """Build the Data Management tab"""
+        tab = self.tabview.tab("📦 Data")
+        
+        scroll = ctk.CTkScrollableFrame(tab, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        
+        # Header
+        ctk.CTkLabel(
+            scroll,
+            text="Data Management",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", pady=(10, 15))
+        
+        # Export/Import
+        data_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
+        data_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            data_frame,
+            text="Export & Import",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", padx=16, pady=(16, 10))
+        
+        btn_frame = ctk.CTkFrame(data_frame, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=16, pady=(0, 16))
+        
+        export_btn = ctk.CTkButton(
+            btn_frame,
+            text="Export Notes",
+            font=ctk.CTkFont(size=13),
+            height=40,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self._export_notes
+        )
+        export_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        
+        import_btn = ctk.CTkButton(
+            btn_frame,
+            text="Import JSON",
+            font=ctk.CTkFont(size=13),
+            height=40,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self._import_notes
+        )
+        import_btn.pack(side="left", fill="x", expand=True)
+        
+        # Database info
+        info_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
+        info_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            info_frame,
+            text="Database Location",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+        
+        db_path = str(Path.home() / ".keepsync_notes" / "notes.db")
+        ctk.CTkLabel(
+            info_frame,
+            text=db_path,
+            font=ctk.CTkFont(size=11, family="Consolas"),
+            text_color=COLORS["text_muted"]
+        ).pack(anchor="w", padx=16, pady=(0, 16))
+        
+        # gkeepapi status
+        if not GKEEPAPI_AVAILABLE:
+            warning_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
+            warning_frame.pack(fill="x", pady=(0, 15))
+            
+            ctk.CTkLabel(
+                warning_frame,
+                text="ℹ️ gkeepapi not installed",
+                font=ctk.CTkFont(size=14),
+                text_color=COLORS["text_muted"]
+            ).pack(anchor="w", padx=16, pady=(12, 4))
+            
+            ctk.CTkLabel(
+                warning_frame,
+                text="Google Keep API sync disabled. Use Takeout import instead.",
+                font=ctk.CTkFont(size=11),
+                text_color=COLORS["text_muted"]
+            ).pack(anchor="w", padx=16, pady=(0, 12))
     
     def _load_settings(self):
         """Load saved settings"""
-        email = self.db.get_setting("keep_email", "")
-        if email:
-            self.email_entry.insert(0, email)
+        # Load cloud sync settings
+        auto_sync = self.db.get_setting("cloud_auto_sync", True)
+        self.cloud_autosync_var.set(auto_sync)
         
-        auto_sync = self.db.get_setting("auto_sync", True)
-        self.auto_sync_var.set(auto_sync)
+        interval = self.db.get_setting("cloud_sync_interval", 15)
+        self.cloud_sync_interval.delete(0, "end")
+        self.cloud_sync_interval.insert(0, str(interval))
         
-        interval = self.db.get_setting("sync_interval", 5)
-        self.sync_interval.delete(0, "end")
-        self.sync_interval.insert(0, str(interval))
+        # Load GitHub repo name if saved
+        github_repo = self.db.get_setting("github_repo", "")
+        if github_repo:
+            self.github_repo_entry.insert(0, github_repo)
         
-        # Update connection status
-        if self.sync_engine.is_authenticated:
-            self.connection_status.configure(text="Connected", text_color=COLORS["accent_green"])
-        else:
-            self.connection_status.configure(text="Disconnected", text_color=COLORS["accent_red"])
+        # Update cloud status
+        self._update_cloud_status()
     
-    def _connect_keep(self):
-        """Connect to Google Keep"""
-        email = self.email_entry.get().strip()
-        token = self.token_entry.get().strip()
-        
-        if not email:
-            messagebox.showerror("Error", "Please enter your email")
+    def _update_cloud_status(self):
+        """Update the cloud connection status display"""
+        if self.cloud_sync and self.cloud_sync.is_connected():
+            status = self.cloud_sync.get_status()
+            provider = status.get("provider", "Unknown")
+            last_sync = status.get("last_sync")
+            
+            if last_sync:
+                sync_time = datetime.fromisoformat(last_sync).strftime("%Y-%m-%d %H:%M")
+                status_text = f"✓ Connected to {provider}\nLast sync: {sync_time}"
+            else:
+                status_text = f"✓ Connected to {provider}"
+            
+            self.cloud_status_label.configure(
+                text=status_text,
+                text_color=COLORS["accent_green"]
+            )
+            self.cloud_disconnect_btn.pack(fill="x", pady=(0, 15))
+        else:
+            self.cloud_status_label.configure(
+                text="Not connected to any cloud service",
+                text_color=COLORS["text_muted"]
+            )
+    
+    def _connect_github(self):
+        """Connect to GitHub"""
+        if not self.cloud_sync:
+            messagebox.showerror("Error", "Cloud sync not available")
             return
+        
+        token = self.github_token_entry.get().strip()
+        repo = self.github_repo_entry.get().strip()
         
         if not token:
-            messagebox.showerror("Error", 
-                "Please enter your Master Token.\n\n"
-                "Click 'Get Master Token' to generate one.")
+            messagebox.showerror("Error", "Please enter your GitHub Personal Access Token")
             return
         
-        self.connect_btn.configure(state="disabled", text="Connecting...")
+        if not repo:
+            repo = "keepsync-notes-backup"
+            self.github_repo_entry.insert(0, repo)
+        
+        self.github_connect_btn.configure(state="disabled", text="Connecting...")
         self.update()
         
-        # Use token as master token
-        success, message = self.sync_engine.login(email, master_token=token)
+        success, message = self.cloud_sync.connect_github(token, repo)
         
-        self.connect_btn.configure(state="normal", text="Connect")
+        self.github_connect_btn.configure(state="normal", text="Connect to GitHub")
         
         if success:
-            self.connection_status.configure(text="Connected", text_color=COLORS["accent_green"])
-            messagebox.showinfo("Success", message)
+            self._update_cloud_status()
+            self._save_autosync_settings()
+            messagebox.showinfo("Success", f"{message}\n\nYour notes will now sync to GitHub.")
+            
+            # Do initial sync
+            if messagebox.askyesno("Initial Sync", "Would you like to sync your notes now?"):
+                self.cloud_sync.sync()
         else:
             messagebox.showerror("Connection Failed", message)
     
-    def _get_master_token(self):
-        """Open master token generator dialog"""
-        TokenGeneratorDialog(self, self.email_entry.get().strip())
+    def _connect_gdrive(self):
+        """Connect to Google Drive"""
+        if not self.cloud_sync:
+            messagebox.showerror("Error", "Cloud sync not available")
+            return
+        
+        self.gdrive_connect_btn.configure(state="disabled", text="Connecting...")
+        self.update()
+        
+        success, message = self.cloud_sync.connect_gdrive()
+        
+        self.gdrive_connect_btn.configure(state="normal", text="Connect to Google Drive")
+        
+        if success:
+            self._update_cloud_status()
+            self._save_autosync_settings()
+            messagebox.showinfo("Success", message)
+            
+            if messagebox.askyesno("Initial Sync", "Would you like to sync your notes now?"):
+                self.cloud_sync.sync()
+        else:
+            messagebox.showerror("Connection Failed", message)
+    
+    def _disconnect_cloud(self):
+        """Disconnect from cloud provider"""
+        if not self.cloud_sync:
+            return
+        
+        if messagebox.askyesno("Confirm", "Disconnect from cloud sync?\n\nYour notes will remain stored locally."):
+            self.cloud_sync.disconnect()
+            self._update_cloud_status()
+    
+    def _save_autosync_settings(self):
+        """Save auto-sync settings"""
+        self.db.set_setting("cloud_auto_sync", self.cloud_autosync_var.get())
+        try:
+            interval = int(self.cloud_sync_interval.get())
+            self.db.set_setting("cloud_sync_interval", interval)
+        except ValueError:
+            pass
+    
+    def _show_gdrive_instructions(self):
+        """Show Google Drive setup instructions"""
+        instructions = """Google Drive Setup Instructions
+
+1. Go to console.cloud.google.com
+
+2. Create a new project (or select existing)
+
+3. Enable the Google Drive API:
+   - Go to "APIs & Services" → "Library"
+   - Search for "Google Drive API"
+   - Click "Enable"
+
+4. Create OAuth credentials:
+   - Go to "APIs & Services" → "Credentials"
+   - Click "Create Credentials" → "OAuth client ID"
+   - Select "Desktop app"
+   - Download the JSON file
+
+5. Save the JSON file as:
+   ~/.keepsync_notes/gdrive_credentials.json
+
+6. Click "Connect to Google Drive" again
+
+The first time you connect, a browser window will open
+for you to authorize the app."""
+        
+        messagebox.showinfo("Google Drive Setup", instructions)
+    
+    def _connect_keep(self):
+        """Connect to Google Keep (legacy)"""
+        messagebox.showinfo(
+            "Google Keep Sync",
+            "Google Keep API sync is no longer reliable.\n\n"
+            "Please use the Takeout import method instead:\n"
+            "1. Go to takeout.google.com\n"
+            "2. Export your Keep notes\n"
+            "3. Use 'Import from Takeout Folder'"
+        )
     
     def _disconnect_keep(self):
         """Disconnect from Google Keep"""
         if messagebox.askyesno("Confirm", "Disconnect from Google Keep?"):
             self.sync_engine.logout()
-            self.connection_status.configure(text="Disconnected", text_color=COLORS["accent_red"])
-            self.token_entry.delete(0, "end")
+    
+    def _get_master_token(self):
+        """Open master token generator"""
+        TokenGeneratorDialog(self, "")
     
     def _export_notes(self):
         """Export notes to JSON"""
@@ -3204,6 +4076,10 @@ class KeepSyncNotesApp(ctk.CTk):
         self.sync_engine = KeepSyncEngine(self.db)
         self.sync_engine.add_sync_callback(self._on_sync_status_change)
         
+        # Initialize cloud sync manager
+        self.cloud_sync = CloudSyncManager(self.db)
+        self.cloud_sync.add_callback(self._on_cloud_sync_status_change)
+        
         # State
         self.current_filter = "all"  # all, archived, trash, label:<name>
         self.search_query = ""
@@ -3214,6 +4090,9 @@ class KeepSyncNotesApp(ctk.CTk):
         
         # Try auto-login to Keep
         self.after(1000, self._try_auto_connect)
+        
+        # Try to restore cloud sync
+        self.after(1500, self._try_restore_cloud_sync)
         
         # Load notes
         self._refresh_notes_list()
@@ -3366,7 +4245,7 @@ class KeepSyncNotesApp(ctk.CTk):
             height=36,
             fg_color="transparent",
             hover_color=COLORS["bg_hover"],
-            command=self._manual_sync
+            command=self._cloud_sync_now
         )
         self.sync_btn.pack(side="right")
         
@@ -3691,11 +4570,77 @@ class KeepSyncNotesApp(ctk.CTk):
     
     def _open_settings(self):
         """Open settings dialog"""
-        SettingsDialog(self, self.db, self.sync_engine)
+        SettingsDialog(self, self.db, self.sync_engine, self.cloud_sync)
+    
+    def _try_restore_cloud_sync(self):
+        """Try to restore cloud sync connection"""
+        provider = self.db.get_setting("cloud_provider")
+        
+        if provider == "gdrive":
+            # Google Drive can auto-reconnect via saved token
+            try:
+                success, _ = self.cloud_sync.connect_gdrive()
+                if success:
+                    self._update_cloud_status_display()
+                    if self.db.get_setting("cloud_auto_sync", True):
+                        interval = self.db.get_setting("cloud_sync_interval", 15)
+                        self.cloud_sync.start_auto_sync(interval)
+            except:
+                pass
+    
+    def _on_cloud_sync_status_change(self, status: str, message: str):
+        """Handle cloud sync status changes"""
+        def update():
+            self._update_cloud_status_display()
+            if status == "synced":
+                self._refresh_notes_list()
+        self.after(0, update)
+    
+    def _update_cloud_status_display(self):
+        """Update the cloud sync status in the sidebar"""
+        if self.cloud_sync.is_connected():
+            status = self.cloud_sync.get_status()
+            provider = status.get("provider", "Cloud")
+            self.sync_status_label.configure(
+                text=f"☁️ {provider}",
+                text_color=COLORS["accent_green"]
+            )
+        else:
+            if self.sync_engine.is_authenticated:
+                self.sync_status_label.configure(text="Connected", text_color=COLORS["accent_green"])
+            else:
+                self.sync_status_label.configure(text="Local only", text_color=COLORS["text_muted"])
+    
+    def _cloud_sync_now(self):
+        """Manually trigger cloud sync"""
+        if self.cloud_sync.is_connected():
+            self.sync_status_label.configure(text="Syncing...", text_color=COLORS["accent_yellow"])
+            
+            def do_sync():
+                success, message, stats = self.cloud_sync.sync()
+                self.after(0, lambda: self._on_cloud_sync_complete(success, message, stats))
+            
+            threading.Thread(target=do_sync, daemon=True).start()
+        else:
+            self._manual_sync()  # Fall back to Keep sync
+    
+    def _on_cloud_sync_complete(self, success: bool, message: str, stats: dict):
+        """Handle cloud sync completion"""
+        if success:
+            pulled = stats.get("downloaded", 0)
+            pushed = stats.get("uploaded", 0)
+            self.sync_status_label.configure(
+                text=f"☁️ ↑{pushed} ↓{pulled}",
+                text_color=COLORS["accent_green"]
+            )
+        else:
+            self.sync_status_label.configure(text="Sync error", text_color=COLORS["accent_red"])
+        self._refresh_notes_list()
     
     def on_closing(self):
         """Handle window close"""
         self.sync_engine.stop_auto_sync()
+        self.cloud_sync.stop_auto_sync()
         self.db.close()
         self.destroy()
 
