@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.7.0] - 2026-06-27
+
+- Added a configurable Google Takeout auto-import watcher for dropped ZIP exports and extracted Keep folders.
+- Added background polling with processed-file signatures so stable exports are imported once.
+- Reused the shared importer/save path for manual Takeout imports and watcher imports.
+
 ## [v1.6.0] - 2026-06-27
 
 - Added stdlib-only import adapters for ENEX, Standard Notes ZIP, Obsidian vaults, Bear ZIP/textbundle exports, Simplenote JSON/ZIP exports, and OneNote HTML/TXT folders.

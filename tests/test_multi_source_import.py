@@ -76,6 +76,25 @@ class MultiSourceImporterTests(unittest.TestCase):
         self.assertIn("personal", notes[0].labels)
         self.assertIn(".md", notes[0].labels)
 
+    def test_imports_takeout_zip(self):
+        export_path = self.root / "takeout.zip"
+        keep_note = {
+            "title": "Keep title",
+            "textContent": "Keep body",
+            "labels": [{"name": "keep-label"}],
+            "isPinned": True,
+        }
+        with zipfile.ZipFile(export_path, "w") as zf:
+            zf.writestr("Takeout/Keep/keep-note.json", json.dumps(keep_note))
+
+        notes = self.importer.import_takeout_zip(export_path)
+
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0].title, "Keep title")
+        self.assertEqual(notes[0].content, "Keep body")
+        self.assertTrue(notes[0].pinned)
+        self.assertIn("keep-label", notes[0].labels)
+
 
 if __name__ == "__main__":
     unittest.main()

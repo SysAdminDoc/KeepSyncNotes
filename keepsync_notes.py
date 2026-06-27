@@ -154,6 +154,7 @@ import sys
 import re
 import mimetypes
 import shutil
+import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
@@ -185,7 +186,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -1330,6 +1331,83 @@ class MultiSourceImporter:
                 return notes
 
         return self.import_text_zip(path, "Simplenote")
+
+    def _takeout_json_files(self, folder: Path) -> List[Path]:
+        candidates = [
+            folder,
+            folder / "Keep",
+            folder / "Takeout" / "Keep",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                files = sorted(candidate.glob("*.json"))
+                if files:
+                    return files
+        return []
+
+    def import_takeout_folder(self, folder: Path) -> List[Note]:
+        notes = []
+        for json_file in self._takeout_json_files(folder):
+            try:
+                data = json.loads(json_file.read_text(encoding="utf-8"))
+                note = self.parse_takeout_note(data, json_file.parent)
+                if note:
+                    notes.append(note)
+            except Exception:
+                continue
+        return notes
+
+    def import_takeout_zip(self, path: Path) -> List[Note]:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with zipfile.ZipFile(path) as zf:
+                zf.extractall(temp_dir)
+            return self.import_takeout_folder(Path(temp_dir))
+
+    def import_takeout_path(self, path: Path) -> List[Note]:
+        if path.is_file() and path.suffix.lower() == ".zip":
+            return self.import_takeout_zip(path)
+        if path.is_dir():
+            return self.import_takeout_folder(path)
+        return []
+
+    def parse_takeout_note(self, data: dict, base_path: Optional[Path] = None) -> Optional[Note]:
+        try:
+            note_id = str(uuid.uuid4())
+            title = data.get("title", "")
+            content = data.get("textContent", "")
+
+            checklist_items = []
+            if "listContent" in data:
+                for item in data["listContent"]:
+                    checklist_items.append(ChecklistItem(
+                        text=item.get("text", ""),
+                        checked=item.get("isChecked", False)
+                    ))
+
+            labels = []
+            if "labels" in data:
+                labels = [label.get("name", "") for label in data["labels"] if label.get("name")]
+
+            attachments_root = Path(self.db.db_path).parent / "attachments"
+            attachments = import_takeout_attachments(data, base_path, attachments_root, note_id)
+
+            return Note(
+                id=note_id,
+                title=title,
+                content=content,
+                note_type=NoteType.CHECKLIST if checklist_items else NoteType.NOTE,
+                checklist_items=checklist_items,
+                labels=labels,
+                attachments=attachments,
+                pinned=data.get("isPinned", False),
+                archived=data.get("isArchived", False),
+                trashed=data.get("isTrashed", False),
+                color=normalize_keep_color(data.get("color", "")),
+                shared_with=extract_shared_with(data),
+                sync_status=SyncStatus.LOCAL_ONLY,
+            )
+        except Exception:
+            return None
 
     def import_external(self, source_type: str, path: Path) -> List[Note]:
         if source_type == "Evernote / Apple Notes ENEX":
@@ -4471,6 +4549,7 @@ class SettingsDialog(ctk.CTkToplevel):
                  cloud_sync: 'CloudSyncManager' = None):
         super().__init__(parent)
         
+        self.app = parent
         self.db = db
         self.sync_engine = sync_engine
         self.cloud_sync = cloud_sync
@@ -4956,6 +5035,49 @@ class SettingsDialog(ctk.CTkToplevel):
             command=self._import_external_source
         )
         external_btn.pack(side="left")
+
+        watcher_frame = ctk.CTkFrame(data_frame, fg_color=COLORS["bg_dark"], corner_radius=8)
+        watcher_frame.pack(fill="x", padx=16, pady=(0, 16))
+
+        self.takeout_watch_enabled_var = ctk.BooleanVar(value=False)
+        watcher_check = ctk.CTkCheckBox(
+            watcher_frame,
+            text="Auto-import Google Takeout drops",
+            variable=self.takeout_watch_enabled_var,
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_secondary"],
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_hover"],
+            command=self._save_takeout_watch_settings
+        )
+        watcher_check.pack(anchor="w", padx=12, pady=(12, 8))
+
+        watcher_inputs = ctk.CTkFrame(watcher_frame, fg_color="transparent")
+        watcher_inputs.pack(fill="x", padx=12, pady=(0, 12))
+
+        self.takeout_watch_entry = ctk.CTkEntry(
+            watcher_inputs,
+            placeholder_text="Watched folder",
+            font=ctk.CTkFont(size=12),
+            height=32,
+            fg_color=COLORS["bg_medium"],
+            border_color=COLORS["border"]
+        )
+        self.takeout_watch_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.takeout_watch_entry.bind("<FocusOut>", lambda _event: self._save_takeout_watch_settings())
+
+        browse_watch_btn = ctk.CTkButton(
+            watcher_inputs,
+            text="Browse",
+            font=ctk.CTkFont(size=12),
+            width=74,
+            height=32,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self._select_takeout_watch_folder
+        )
+        browse_watch_btn.pack(side="left")
         
         # Database info
         info_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
@@ -5009,6 +5131,10 @@ class SettingsDialog(ctk.CTkToplevel):
         github_repo = self.db.get_setting("github_repo", "")
         if github_repo:
             self.github_repo_entry.insert(0, github_repo)
+
+        self.takeout_watch_enabled_var.set(self.db.get_setting("takeout_watch_enabled", False))
+        self.takeout_watch_entry.delete(0, "end")
+        self.takeout_watch_entry.insert(0, self.db.get_setting("takeout_watch_folder", ""))
         
         # Update cloud status
         self._update_cloud_status()
@@ -5112,6 +5238,23 @@ class SettingsDialog(ctk.CTkToplevel):
             self.db.set_setting("cloud_sync_interval", interval)
         except ValueError:
             pass
+
+    def _select_takeout_watch_folder(self):
+        folder = filedialog.askdirectory(title="Select Takeout watch folder")
+        if not folder:
+            return
+        self.takeout_watch_entry.delete(0, "end")
+        self.takeout_watch_entry.insert(0, folder)
+        self._save_takeout_watch_settings()
+
+    def _save_takeout_watch_settings(self):
+        self.db.set_setting("takeout_watch_enabled", self.takeout_watch_enabled_var.get())
+        self.db.set_setting("takeout_watch_folder", self.takeout_watch_entry.get().strip())
+        if hasattr(self.app, "_schedule_takeout_watch_check"):
+            if self.app._takeout_watch_after_id:
+                self.app.after_cancel(self.app._takeout_watch_after_id)
+                self.app._takeout_watch_after_id = None
+            self.app._schedule_takeout_watch_check(delay_ms=1000)
     
     def _show_gdrive_instructions(self):
         """Show Google Drive setup instructions"""
@@ -5408,17 +5551,10 @@ for you to authorize the app."""
             return
         
         folder_path = Path(folder)
-        
-        # Find all JSON files in the folder
-        json_files = list(folder_path.glob("*.json"))
-        
-        if not json_files:
-            # Maybe they selected the parent Takeout folder
-            keep_folder = folder_path / "Keep"
-            if keep_folder.exists():
-                json_files = list(keep_folder.glob("*.json"))
-        
-        if not json_files:
+        importer = MultiSourceImporter(self.db)
+        notes = importer.import_takeout_folder(folder_path)
+
+        if not notes:
             messagebox.showerror(
                 "No Notes Found",
                 "No JSON files found in the selected folder.\n\n"
@@ -5427,27 +5563,12 @@ for you to authorize the app."""
                 "2. Selected the 'Keep' folder inside"
             )
             return
-        
-        imported = 0
-        errors = 0
-        
-        for json_file in json_files:
-            try:
-                with open(json_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                
-                note = self._parse_takeout_note(data, json_file.parent)
-                if self._save_imported_note(note):
-                    imported += 1
-                else:
-                    errors += 1
-            except Exception as e:
-                errors += 1
+
+        imported = importer.save_notes(notes)
         
         messagebox.showinfo(
             "Import Complete",
-            f"Imported {imported} notes from Google Takeout!\n"
-            f"Skipped/errors: {errors}"
+            f"Imported {imported} notes from Google Takeout!"
         )
 
 
@@ -5485,6 +5606,8 @@ class KeepSyncNotesApp(ctk.CTk):
         self.search_query = ""
         self.selected_note: Optional[Note] = None
         self._reminder_after_id = None
+        self._takeout_watch_after_id = None
+        self._takeout_watch_in_progress = False
         
         # Build UI
         self._build_ui()
@@ -5498,6 +5621,7 @@ class KeepSyncNotesApp(ctk.CTk):
         # Load notes
         self._refresh_notes_list()
         self._schedule_reminder_check(delay_ms=1000)
+        self._schedule_takeout_watch_check(delay_ms=5000)
         
         # Start auto-sync if enabled
         if self.db.get_setting("auto_sync", True):
@@ -6055,6 +6179,104 @@ class KeepSyncNotesApp(ctk.CTk):
         finally:
             self._schedule_reminder_check()
 
+    def _schedule_takeout_watch_check(self, delay_ms: int = 60000):
+        """Schedule the watched Takeout folder poll."""
+        self._takeout_watch_after_id = self.after(delay_ms, self._check_takeout_watch_folder)
+
+    def _takeout_watch_enabled(self) -> bool:
+        folder = self.db.get_setting("takeout_watch_folder", "")
+        return bool(self.db.get_setting("takeout_watch_enabled", False) and folder and Path(folder).exists())
+
+    def _takeout_candidate_signature(self, path: Path) -> str:
+        if path.is_file():
+            stat = path.stat()
+            return f"file:{stat.st_size}:{stat.st_mtime_ns}"
+
+        json_files = MultiSourceImporter(self.db)._takeout_json_files(path)
+        if not json_files:
+            return ""
+        size = 0
+        latest = 0
+        for json_file in json_files:
+            stat = json_file.stat()
+            size += stat.st_size
+            latest = max(latest, stat.st_mtime_ns)
+        return f"folder:{len(json_files)}:{size}:{latest}"
+
+    def _takeout_watch_candidates(self, folder: Path) -> List[Path]:
+        candidates = []
+        for child in folder.iterdir():
+            if child.name.startswith("."):
+                continue
+            try:
+                if time.time() - child.stat().st_mtime < 10:
+                    continue
+            except OSError:
+                continue
+            if child.is_file() and child.suffix.lower() == ".zip":
+                candidates.append(child)
+            elif child.is_dir() and MultiSourceImporter(self.db)._takeout_json_files(child):
+                candidates.append(child)
+        return sorted(candidates, key=lambda item: item.name.lower())
+
+    def _check_takeout_watch_folder(self):
+        """Import new Takeout ZIPs/folders from the configured watch folder."""
+        if self._takeout_watch_in_progress or not self._takeout_watch_enabled():
+            self._schedule_takeout_watch_check()
+            return
+
+        watch_folder = Path(self.db.get_setting("takeout_watch_folder", ""))
+        processed = self.db.get_setting("takeout_processed_imports", {})
+        if not isinstance(processed, dict):
+            processed = {}
+
+        pending = []
+        for candidate in self._takeout_watch_candidates(watch_folder):
+            try:
+                signature = self._takeout_candidate_signature(candidate)
+            except OSError:
+                continue
+            key = str(candidate.resolve())
+            if signature and processed.get(key) != signature:
+                pending.append((candidate, key, signature))
+
+        if not pending:
+            self._schedule_takeout_watch_check()
+            return
+
+        self._takeout_watch_in_progress = True
+        self.sync_status_label.configure(text="Auto-importing...", text_color=COLORS["accent_yellow"])
+
+        def do_import():
+            importer = MultiSourceImporter(self.db)
+            imported = 0
+            errors = 0
+            updated_processed = dict(processed)
+
+            for path, key, signature in pending:
+                try:
+                    notes = importer.import_takeout_path(path)
+                    imported += importer.save_notes(notes)
+                    updated_processed[key] = signature
+                except Exception as e:
+                    errors += 1
+                    self.db.log_sync("auto_import", key, "error", str(e))
+
+            self.db.set_setting("takeout_processed_imports", updated_processed)
+            self.after(0, lambda: self._on_takeout_watch_complete(imported, errors))
+
+        threading.Thread(target=do_import, daemon=True).start()
+
+    def _on_takeout_watch_complete(self, imported: int, errors: int):
+        self._takeout_watch_in_progress = False
+        if imported:
+            self.sync_status_label.configure(text=f"Auto-imported {imported}", text_color=COLORS["accent_green"])
+            self._refresh_notes_list()
+            self._refresh_labels()
+        elif errors:
+            self.sync_status_label.configure(text="Auto-import error", text_color=COLORS["accent_red"])
+        self._schedule_takeout_watch_check()
+
     def _notify_reminder(self, note: Note):
         """Show a desktop reminder notification when possible."""
         title = note.title or "Untitled"
@@ -6089,6 +6311,8 @@ class KeepSyncNotesApp(ctk.CTk):
         """Handle window close"""
         if self._reminder_after_id:
             self.after_cancel(self._reminder_after_id)
+        if self._takeout_watch_after_id:
+            self.after_cancel(self._takeout_watch_after_id)
         self.sync_engine.stop_auto_sync()
         self.cloud_sync.stop_auto_sync()
         self.db.close()
