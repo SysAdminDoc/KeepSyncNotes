@@ -1,6 +1,6 @@
 # KeepSyncNotes
 
-![Version](https://img.shields.io/badge/version-1.7.0-blue)
+![Version](https://img.shields.io/badge/version-1.8.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Language](https://img.shields.io/badge/language-Python-3776AB)
 ![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
@@ -20,6 +20,7 @@ Dependencies auto-install on first run. No manual `pip install` needed.
 
 - **Google Keep Import** — Import notes from a Google Takeout `.zip` or extracted JSON folder
 - **Auto-Import Watcher** — Watch a local folder for new Google Takeout ZIPs or extracted Keep folders
+- **Import Conflict Resolution** — Review diffs and keep local, use imported, or merge duplicates during foreground imports
 - **Multi-Source Import** — Import ENEX, Standard Notes ZIP, Obsidian vaults, Bear ZIP, Simplenote exports, and OneNote HTML folders
 - **Checklist Notes** — Create nested checklist items, reorder rows, and preserve checked states
 - **Keep Colors & Pins** — Preserve Keep note colors, show color swatches in cards, and pin notes to the top

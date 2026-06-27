@@ -156,6 +156,7 @@ import mimetypes
 import shutil
 import tempfile
 import zipfile
+import difflib
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from html import unescape
@@ -186,7 +187,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -825,6 +826,62 @@ class Note:
             updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else datetime.now(timezone.utc),
         )
 
+def note_diff_body(note: Note) -> str:
+    if note.note_type == NoteType.CHECKLIST:
+        return "\n".join(
+            f"{'  ' * item.indent}{'[x]' if item.checked else '[ ]'} {item.text}"
+            for item in note.checklist_items
+        )
+    return note.content or ""
+
+def notes_equivalent(left: Note, right: Note) -> bool:
+    return (
+        (left.title or "").strip() == (right.title or "").strip()
+        and note_diff_body(left).strip() == note_diff_body(right).strip()
+        and sorted(left.labels) == sorted(right.labels)
+        and left.note_type == right.note_type
+    )
+
+def note_conflict_diff(local_note: Note, imported_note: Note) -> str:
+    local_lines = [f"# {local_note.title or 'Untitled'}", *note_diff_body(local_note).splitlines()]
+    imported_lines = [f"# {imported_note.title or 'Untitled'}", *note_diff_body(imported_note).splitlines()]
+    return "\n".join(difflib.unified_diff(
+        local_lines,
+        imported_lines,
+        fromfile="local",
+        tofile="imported",
+        lineterm=""
+    ))
+
+def merge_note_conflict(local_note: Note, imported_note: Note) -> Note:
+    merged = Note.from_dict(local_note.to_dict())
+    merged.labels = normalize_import_labels(local_note.labels + imported_note.labels)
+    merged.attachments = local_note.attachments + [
+        attachment for attachment in imported_note.attachments
+        if attachment.filename not in {existing.filename for existing in local_note.attachments}
+    ]
+    merged.updated_at = datetime.now(timezone.utc)
+    merged.local_modified = merged.updated_at
+
+    if local_note.note_type == NoteType.CHECKLIST or imported_note.note_type == NoteType.CHECKLIST:
+        merged.note_type = NoteType.NOTE
+        local_body = note_diff_body(local_note)
+        imported_body = note_diff_body(imported_note)
+    else:
+        local_body = local_note.content or ""
+        imported_body = imported_note.content or ""
+
+    if local_body.strip() == imported_body.strip():
+        merged.content = local_body
+    else:
+        merged.content = (
+            f"{local_body.strip()}\n\n"
+            "--- Imported version ---\n\n"
+            f"{imported_body.strip()}"
+        ).strip()
+    merged.checklist_items = []
+    return merged
+
 @dataclass
 class Label:
     id: str
@@ -1000,6 +1057,52 @@ class DatabaseManager:
         
         cursor.execute(query)
         return [self._row_to_note(row) for row in cursor.fetchall()]
+
+    def find_import_conflict(self, note: Note) -> Optional[Note]:
+        """Find an existing local note that likely represents the same imported note."""
+        title = (note.title or "").strip()
+        if not title:
+            return None
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM notes WHERE lower(title) = lower(?) AND trashed = 0 ORDER BY updated_at DESC",
+            (title,)
+        )
+        for row in cursor.fetchall():
+            existing = self._row_to_note(row)
+            if existing.id != note.id:
+                return existing
+        return None
+
+    def save_imported_note(self, note: Note, conflict_policy: str = "copy") -> str:
+        """Save an imported note and return imported, skipped, conflict_copy, or failed."""
+        conflict = self.find_import_conflict(note)
+        if conflict:
+            if notes_equivalent(conflict, note):
+                return "skipped"
+            if conflict_policy == "skip":
+                return "skipped"
+            if conflict_policy == "replace":
+                note.id = conflict.id
+                note.created_at = conflict.created_at
+                note.keep_id = conflict.keep_id
+            elif conflict_policy == "merge":
+                note = merge_note_conflict(conflict, note)
+            else:
+                note.title = f"{note.title} (import conflict)"
+                note.sync_status = SyncStatus.CONFLICT
+                note.labels = normalize_import_labels(note.labels + ["import-conflict"])
+                if self.save_note(note):
+                    for label in note.labels:
+                        self.ensure_label(label)
+                    return "conflict_copy"
+                return "failed"
+
+        if self.save_note(note):
+            for label in note.labels:
+                self.ensure_label(label)
+            return "imported"
+        return "failed"
     
     def get_notes_by_label(self, label: str) -> List[Note]:
         """Get notes with a specific label"""
@@ -1212,10 +1315,9 @@ class MultiSourceImporter:
         for note in notes:
             note.keep_id = None
             note.sync_status = SyncStatus.LOCAL_ONLY
-            if self.db.save_note(note):
+            result = self.db.save_imported_note(note, conflict_policy="copy")
+            if result in {"imported", "conflict_copy"}:
                 imported += 1
-                for label in note.labels:
-                    self.db.ensure_label(label)
         return imported
 
     def _note_from_text(
@@ -4164,6 +4266,83 @@ class NoteEditor(ctk.CTkFrame):
         self.on_close_callback()
 
 
+class ImportConflictDialog(ctk.CTkToplevel):
+    """Modal import conflict resolver."""
+
+    def __init__(self, parent, local_note: Note, imported_note: Note):
+        super().__init__(parent)
+        self.local_note = local_note
+        self.imported_note = imported_note
+        self.result = "local"
+
+        self.title("Import Conflict")
+        self.geometry("760x560")
+        self.configure(fg_color=COLORS["bg_dark"])
+        self.transient(parent)
+        self.grab_set()
+
+        self._build_ui()
+        self.wait_window()
+
+    def _build_ui(self):
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=(18, 10))
+
+        ctk.CTkLabel(
+            header,
+            text="Import Conflict",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            header,
+            text=self.imported_note.title or "Untitled",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_secondary"],
+            anchor="w"
+        ).pack(anchor="w", pady=(4, 0))
+
+        diff_box = ctk.CTkTextbox(
+            self,
+            font=ctk.CTkFont(size=12, family="Consolas"),
+            fg_color=COLORS["bg_medium"],
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            corner_radius=8,
+            wrap="none"
+        )
+        diff_box.pack(fill="both", expand=True, padx=20, pady=(0, 14))
+        diff_text = note_conflict_diff(self.local_note, self.imported_note) or "Metadata differs; content is identical."
+        diff_box.insert("1.0", diff_text)
+        diff_box.configure(state="disabled")
+
+        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions.pack(fill="x", padx=20, pady=(0, 18))
+
+        for label, result, color in (
+            ("Keep Local", "local", COLORS["bg_light"]),
+            ("Use Imported", "imported", COLORS["accent_blue"]),
+            ("Merge", "merge", COLORS["accent_green"]),
+        ):
+            button = ctk.CTkButton(
+                actions,
+                text=label,
+                font=ctk.CTkFont(size=13, weight="bold"),
+                height=38,
+                fg_color=color,
+                hover_color=COLORS["bg_hover"] if result == "local" else color,
+                text_color=COLORS["text_primary"] if result == "local" else COLORS["bg_darkest"],
+                command=lambda choice=result: self._finish(choice)
+            )
+            button.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+    def _finish(self, result: str):
+        self.result = result
+        self.destroy()
+
+
 class TakeoutInstructionsDialog(ctk.CTkToplevel):
     """Dialog showing Google Takeout export instructions"""
     
@@ -5308,11 +5487,21 @@ for you to authorize the app."""
     def _save_imported_note(self, note: Note) -> bool:
         if not note:
             return False
-        if self.db.save_note(note):
-            for label in note.labels:
-                self.db.ensure_label(label)
-            return True
-        return False
+        conflict = self.db.find_import_conflict(note)
+        if conflict:
+            if notes_equivalent(conflict, note):
+                return False
+            action = ImportConflictDialog(self, conflict, note).result
+            if action == "local":
+                return False
+            if action == "imported":
+                note.id = conflict.id
+                note.created_at = conflict.created_at
+                note.keep_id = conflict.keep_id
+                return self.db.save_imported_note(note, conflict_policy="replace") in {"imported", "skipped"}
+            if action == "merge":
+                return self.db.save_imported_note(note, conflict_policy="merge") in {"imported", "skipped"}
+        return self.db.save_imported_note(note, conflict_policy="copy") in {"imported", "conflict_copy"}
     
     def _export_notes(self):
         """Export notes to JSON"""
@@ -5357,7 +5546,7 @@ for you to authorize the app."""
         try:
             importer = MultiSourceImporter(self.db)
             notes = importer.import_external(source_type, Path(selected))
-            imported = importer.save_notes(notes)
+            imported = sum(1 for note in notes if self._save_imported_note(note))
             messagebox.showinfo(
                 "Import Complete",
                 f"Imported {imported} notes from {source_type}"
@@ -5564,7 +5753,7 @@ for you to authorize the app."""
             )
             return
 
-        imported = importer.save_notes(notes)
+        imported = sum(1 for note in notes if self._save_imported_note(note))
         
         messagebox.showinfo(
             "Import Complete",

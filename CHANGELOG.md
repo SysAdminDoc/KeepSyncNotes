@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.8.0] - 2026-06-27
+
+- Added foreground import conflict resolution with a unified diff and Keep Local, Use Imported, and Merge choices.
+- Added duplicate detection for imported notes by title.
+- Added noninteractive conflict handling for background imports by skipping identical duplicates and saving differing duplicates as conflict-marked copies.
+
 ## [v1.7.0] - 2026-06-27
 
 - Added a configurable Google Takeout auto-import watcher for dropped ZIP exports and extracted Keep folders.
