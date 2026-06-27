@@ -171,7 +171,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -210,6 +210,54 @@ COLORS = {
     "sync_local": "#60a5fa",       # Local only
 }
 
+KEEP_COLOR_PALETTE = {
+    "": ("Default", COLORS["bg_medium"]),
+    "red": ("Red", "#f28b82"),
+    "orange": ("Orange", "#fbbc04"),
+    "yellow": ("Yellow", "#fff475"),
+    "green": ("Green", "#ccff90"),
+    "teal": ("Teal", "#a7ffeb"),
+    "blue": ("Blue", "#cbf0f8"),
+    "darkblue": ("Dark blue", "#aecbfa"),
+    "purple": ("Purple", "#d7aefb"),
+    "pink": ("Pink", "#fdcfe8"),
+    "brown": ("Brown", "#e6c9a8"),
+    "gray": ("Gray", "#e8eaed"),
+}
+
+KEEP_COLOR_ALIASES = {
+    "default": "",
+    "white": "",
+    "none": "",
+    "": "",
+    "dark_blue": "darkblue",
+    "dark blue": "darkblue",
+}
+
+def normalize_keep_color(value: Any) -> str:
+    """Normalize Keep color names from Takeout/gkeepapi/storage."""
+    if value is None:
+        return ""
+    color = str(value).strip().lower().replace("colorvalue.", "")
+    color = color.replace("-", "_")
+    color = KEEP_COLOR_ALIASES.get(color, color)
+    return color if color in KEEP_COLOR_PALETTE else ""
+
+def keep_color_hex(value: Any) -> str:
+    color = normalize_keep_color(value)
+    return KEEP_COLOR_PALETTE[color][1]
+
+def keep_color_name(value: Any) -> str:
+    color = normalize_keep_color(value)
+    return KEEP_COLOR_PALETTE[color][0]
+
+def clamp_checklist_indent(value: Any) -> int:
+    try:
+        indent = int(value or 0)
+    except (TypeError, ValueError):
+        indent = 0
+    return max(0, min(4, indent))
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA MODELS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -232,16 +280,18 @@ class ChecklistItem:
     text: str
     checked: bool = False
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    indent: int = 0
     
     def to_dict(self) -> dict:
-        return {"id": self.id, "text": self.text, "checked": self.checked}
+        return {"id": self.id, "text": self.text, "checked": self.checked, "indent": self.indent}
     
     @classmethod
     def from_dict(cls, data: dict) -> "ChecklistItem":
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             text=data.get("text", ""),
-            checked=data.get("checked", False)
+            checked=data.get("checked", False),
+            indent=clamp_checklist_indent(data.get("indent", 0))
         )
 
 @dataclass
@@ -269,11 +319,17 @@ class Note:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     def __post_init__(self):
+        self.color = normalize_keep_color(self.color)
+        for item in self.checklist_items:
+            item.indent = clamp_checklist_indent(item.indent)
         self.update_hash()
     
     def update_hash(self):
         """Generate content hash for change detection"""
-        content = f"{self.title}|{self.content}|{json.dumps([i.to_dict() for i in self.checklist_items])}|{self.pinned}|{self.archived}"
+        content = (
+            f"{self.title}|{self.content}|{json.dumps([i.to_dict() for i in self.checklist_items])}|"
+            f"{json.dumps(self.labels)}|{self.pinned}|{self.archived}|{self.trashed}|{self.color}"
+        )
         self.content_hash = hashlib.md5(content.encode()).hexdigest()
     
     def to_dict(self) -> dict:
@@ -309,7 +365,7 @@ class Note:
             pinned=data.get("pinned", False),
             archived=data.get("archived", False),
             trashed=data.get("trashed", False),
-            color=data.get("color", ""),
+            color=normalize_keep_color(data.get("color", "")),
             keep_id=data.get("keep_id"),
             sync_status=SyncStatus(data.get("sync_status", "local_only")),
             local_modified=datetime.fromisoformat(data["local_modified"]) if data.get("local_modified") else None,
@@ -533,7 +589,7 @@ class DatabaseManager:
             pinned=bool(row["pinned"]),
             archived=bool(row["archived"]),
             trashed=bool(row["trashed"]),
-            color=row["color"] or "",
+            color=normalize_keep_color(row["color"] or ""),
             keep_id=row["keep_id"],
             sync_status=SyncStatus(row["sync_status"]) if row["sync_status"] else SyncStatus.LOCAL_ONLY,
             local_modified=datetime.fromisoformat(row["local_modified"]) if row["local_modified"] else None,
@@ -864,7 +920,7 @@ class KeepSyncEngine:
             pinned=keep_note.pinned,
             archived=keep_note.archived,
             trashed=keep_note.trashed,
-            color=str(keep_note.color.value) if keep_note.color else "",
+            color=normalize_keep_color(keep_note.color.value if keep_note.color else ""),
             keep_id=keep_note.id,
             remote_modified=keep_note.timestamps.updated,
             created_at=existing.created_at if existing else (keep_note.timestamps.created or datetime.now(timezone.utc)),
@@ -883,6 +939,7 @@ class KeepSyncEngine:
         
         keep_note.pinned = local_note.pinned
         keep_note.archived = local_note.archived
+        self._apply_keep_color(keep_note, local_note.color)
         
         # Add labels
         for label_name in local_note.labels:
@@ -906,6 +963,19 @@ class KeepSyncEngine:
         
         keep_note.pinned = local_note.pinned
         keep_note.archived = local_note.archived
+        self._apply_keep_color(keep_note, local_note.color)
+
+    def _apply_keep_color(self, keep_note, color: str):
+        """Apply local color to a gkeepapi note when the API supports it."""
+        normalized = normalize_keep_color(color)
+        if not normalized or not GKEEPAPI_AVAILABLE:
+            return
+        try:
+            color_enum = getattr(gkeepapi.node.ColorValue, normalized.upper(), None)
+            if color_enum is not None:
+                keep_note.color = color_enum
+        except Exception:
+            pass
     
     def unlink_note(self, note_id: str, delete_from_keep: bool = True) -> bool:
         """
@@ -2126,6 +2196,15 @@ class NoteCard(ctk.CTkFrame):
         self._bind_events()
     
     def _build_ui(self):
+        if normalize_keep_color(self.note.color):
+            color_strip = ctk.CTkFrame(
+                self,
+                fg_color=keep_color_hex(self.note.color),
+                height=5,
+                corner_radius=2
+            )
+            color_strip.pack(fill="x", padx=1, pady=(1, 0))
+
         # Main content area
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.content_frame.pack(fill="both", expand=True, padx=12, pady=10)
@@ -2168,7 +2247,7 @@ class NoteCard(ctk.CTkFrame):
         # Content preview
         if self.note.note_type == NoteType.CHECKLIST:
             preview_text = "\n".join([
-                f"{'✓' if item.checked else '○'} {item.text}"
+                f"{'  ' * min(item.indent, 3)}{'[x]' if item.checked else '[ ]'} {item.text}"
                 for item in self.note.checklist_items[:3]
             ])
             if len(self.note.checklist_items) > 3:
@@ -2295,6 +2374,7 @@ class NoteEditor(ctk.CTkFrame):
         self.on_close_callback = on_close
         self.current_note: Optional[Note] = None
         self.is_modified = False
+        self.selected_color = ""
         
         self._build_ui()
     
@@ -2412,6 +2492,34 @@ class NoteEditor(ctk.CTkFrame):
             command=self._on_type_change
         )
         self.checklist_radio.pack(side="left")
+
+        # Color selector
+        color_section = ctk.CTkFrame(editor_frame, fg_color="transparent")
+        color_section.pack(fill="x", pady=(0, 12))
+
+        ctk.CTkLabel(
+            color_section,
+            text="Color",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=COLORS["text_secondary"]
+        ).pack(side="left", padx=(0, 10))
+
+        self.color_buttons = {}
+        for color_key, (color_name, color_hex) in KEEP_COLOR_PALETTE.items():
+            button = ctk.CTkButton(
+                color_section,
+                text="",
+                width=24,
+                height=24,
+                fg_color=color_hex,
+                hover_color=color_hex,
+                border_width=2,
+                border_color=COLORS["border"],
+                corner_radius=12,
+                command=lambda c=color_key: self._select_color(c)
+            )
+            button.pack(side="left", padx=(0, 5))
+            self.color_buttons[color_key] = button
         
         # Content area (switchable between text and checklist)
         self.content_container = ctk.CTkFrame(editor_frame, fg_color="transparent")
@@ -2525,6 +2633,9 @@ class NoteEditor(ctk.CTkFrame):
             else:
                 self.content_text.delete("1.0", "end")
                 self.content_text.insert("1.0", note.content)
+
+            self.selected_color = normalize_keep_color(note.color)
+            self._refresh_color_buttons()
             
             self._load_labels(note.labels)
             self.sync_badge.update_status(note.sync_status)
@@ -2551,6 +2662,8 @@ class NoteEditor(ctk.CTkFrame):
             self.content_text.delete("1.0", "end")
             self.note_type_var.set("note")
             self._on_type_change()
+            self.selected_color = ""
+            self._refresh_color_buttons()
             self._clear_checklist_items()
             self._load_labels([])
             self.sync_badge.update_status(SyncStatus.LOCAL_ONLY)
@@ -2562,6 +2675,23 @@ class NoteEditor(ctk.CTkFrame):
     def _on_modify(self, event=None):
         """Mark note as modified"""
         self.is_modified = True
+
+    def _select_color(self, color: str):
+        """Select a Keep color for the note."""
+        self.selected_color = normalize_keep_color(color)
+        self._refresh_color_buttons()
+        self._on_modify()
+
+    def _refresh_color_buttons(self):
+        """Update color selector button borders."""
+        if not hasattr(self, "color_buttons"):
+            return
+        for color_key, button in self.color_buttons.items():
+            is_selected = color_key == self.selected_color
+            button.configure(
+                border_color=COLORS["text_primary"] if is_selected else COLORS["border"],
+                border_width=3 if is_selected else 2
+            )
     
     def _on_type_change(self):
         """Switch between text and checklist editor"""
@@ -2581,11 +2711,30 @@ class NoteEditor(ctk.CTkFrame):
             self.pin_btn.configure(image=IconManager.get_icon("pin", 18, pin_color))
             self._on_modify()
     
-    def _add_checklist_item(self, text: str = "", checked: bool = False):
-        """Add a checklist item widget"""
+    def _add_checklist_item(
+        self,
+        text: str = "",
+        checked: bool = False,
+        item_id: Optional[str] = None,
+        indent: int = 0,
+        focus: bool = True
+    ):
+        """Add a checklist item widget."""
         item_frame = ctk.CTkFrame(self.checklist_scroll, fg_color="transparent")
-        item_frame.pack(fill="x", pady=2)
-        
+        item_frame.item_id = item_id or str(uuid.uuid4())
+        item_frame.indent = clamp_checklist_indent(indent)
+
+        drag_handle = ctk.CTkLabel(
+            item_frame,
+            text="::",
+            width=22,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=COLORS["text_muted"]
+        )
+        drag_handle.pack(side="left", padx=(4, 4))
+        drag_handle.bind("<ButtonPress-1>", lambda e, frame=item_frame: self._start_checklist_drag(frame))
+        drag_handle.bind("<ButtonRelease-1>", lambda e, frame=item_frame: self._finish_checklist_drag(frame, e))
+
         check_var = ctk.BooleanVar(value=checked)
         checkbox = ctk.CTkCheckBox(
             item_frame,
@@ -2598,8 +2747,8 @@ class NoteEditor(ctk.CTkFrame):
             border_color=COLORS["border_light"],
             command=self._on_modify
         )
-        checkbox.pack(side="left", padx=(4, 8))
-        
+        checkbox.pack(side="left", padx=(0, 8))
+
         entry = ctk.CTkEntry(
             item_frame,
             placeholder_text="List item",
@@ -2612,10 +2761,47 @@ class NoteEditor(ctk.CTkFrame):
         entry.insert(0, text)
         entry.bind("<KeyRelease>", self._on_modify)
         entry.bind("<Return>", lambda e: self._add_checklist_item())
-        
+
+        for label, delta in (("<", -1), (">", 1)):
+            indent_btn = ctk.CTkButton(
+                item_frame,
+                text=label,
+                width=24,
+                height=24,
+                fg_color="transparent",
+                hover_color=COLORS["bg_hover"],
+                text_color=COLORS["text_muted"],
+                command=lambda d=delta, frame=item_frame: self._adjust_checklist_indent(frame, d)
+            )
+            indent_btn.pack(side="right", padx=(2, 0))
+
+        down_btn = ctk.CTkButton(
+            item_frame,
+            text="Dn",
+            width=32,
+            height=24,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_muted"],
+            command=lambda: self._move_checklist_item(item_frame, 1)
+        )
+        down_btn.pack(side="right", padx=(2, 0))
+
+        up_btn = ctk.CTkButton(
+            item_frame,
+            text="Up",
+            width=32,
+            height=24,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_muted"],
+            command=lambda: self._move_checklist_item(item_frame, -1)
+        )
+        up_btn.pack(side="right", padx=(2, 0))
+
         delete_btn = ctk.CTkButton(
             item_frame,
-            text="×",
+            text="x",
             width=24,
             height=24,
             fg_color="transparent",
@@ -2623,32 +2809,86 @@ class NoteEditor(ctk.CTkFrame):
             text_color=COLORS["text_muted"],
             command=lambda: self._remove_checklist_item(item_frame)
         )
-        delete_btn.pack(side="right", padx=4)
-        
+        delete_btn.pack(side="right", padx=(4, 4))
+
         item_frame.check_var = check_var
         item_frame.entry = entry
         self.checklist_items_widgets.append(item_frame)
-        
-        entry.focus_set()
+        self._repack_checklist_items()
+
+        if focus:
+            entry.focus_set()
         self._on_modify()
-    
+
+    def _repack_checklist_items(self):
+        """Pack checklist rows in stored order with visual indentation."""
+        for widget in self.checklist_items_widgets:
+            widget.pack_forget()
+            widget.pack(fill="x", pady=2, padx=(4 + widget.indent * 24, 4))
+
+    def _move_checklist_item(self, item_frame, delta: int):
+        """Move a checklist item up or down."""
+        try:
+            index = self.checklist_items_widgets.index(item_frame)
+        except ValueError:
+            return
+        new_index = max(0, min(len(self.checklist_items_widgets) - 1, index + delta))
+        if new_index == index:
+            return
+        self.checklist_items_widgets.pop(index)
+        self.checklist_items_widgets.insert(new_index, item_frame)
+        self._repack_checklist_items()
+        self._on_modify()
+
+    def _adjust_checklist_indent(self, item_frame, delta: int):
+        """Indent or outdent a checklist item."""
+        item_frame.indent = max(0, min(4, item_frame.indent + delta))
+        self._repack_checklist_items()
+        self._on_modify()
+
+    def _start_checklist_drag(self, item_frame):
+        """Record which checklist row is being dragged."""
+        self._dragging_checklist_item = item_frame
+        item_frame.configure(fg_color=COLORS["bg_light"])
+
+    def _finish_checklist_drag(self, item_frame, event):
+        """Drop a dragged checklist row near the row under the pointer."""
+        if getattr(self, "_dragging_checklist_item", None) is not item_frame:
+            return
+
+        others = [widget for widget in self.checklist_items_widgets if widget is not item_frame]
+        insert_at = len(others)
+        for index, widget in enumerate(others):
+            midpoint = widget.winfo_rooty() + (widget.winfo_height() / 2)
+            if event.y_root < midpoint:
+                insert_at = index
+                break
+
+        self.checklist_items_widgets = others
+        self.checklist_items_widgets.insert(insert_at, item_frame)
+        item_frame.configure(fg_color="transparent")
+        self._dragging_checklist_item = None
+        self._repack_checklist_items()
+        self._on_modify()
+
     def _remove_checklist_item(self, item_frame):
-        """Remove a checklist item widget"""
+        """Remove a checklist item widget."""
         item_frame.destroy()
-        self.checklist_items_widgets.remove(item_frame)
+        if item_frame in self.checklist_items_widgets:
+            self.checklist_items_widgets.remove(item_frame)
         self._on_modify()
-    
+
     def _clear_checklist_items(self):
-        """Clear all checklist item widgets"""
+        """Clear all checklist item widgets."""
         for widget in self.checklist_items_widgets:
             widget.destroy()
         self.checklist_items_widgets.clear()
-    
+
     def _load_checklist_items(self, items: List[ChecklistItem]):
-        """Load checklist items into widgets"""
+        """Load checklist items into widgets."""
         self._clear_checklist_items()
         for item in items:
-            self._add_checklist_item(item.text, item.checked)
+            self._add_checklist_item(item.text, item.checked, item.id, item.indent, focus=False)
     
     def _add_label(self, event=None):
         """Add a label to the note"""
@@ -2708,12 +2948,15 @@ class NoteEditor(ctk.CTkFrame):
         # Update note data
         self.current_note.title = self.title_entry.get()
         self.current_note.note_type = NoteType(self.note_type_var.get())
+        self.current_note.color = self.selected_color
         
         if self.current_note.note_type == NoteType.CHECKLIST:
             self.current_note.checklist_items = [
                 ChecklistItem(
+                    id=widget.item_id,
                     text=widget.entry.get(),
-                    checked=widget.check_var.get()
+                    checked=widget.check_var.get(),
+                    indent=widget.indent
                 )
                 for widget in self.checklist_items_widgets
                 if widget.entry.get().strip()
@@ -3912,6 +4155,7 @@ for you to authorize the app."""
                 pinned=data.get("isPinned", False),
                 archived=data.get("isArchived", False),
                 trashed=data.get("isTrashed", False),
+                color=normalize_keep_color(data.get("color", "")),
                 sync_status=SyncStatus.LOCAL_ONLY,
             )
         except Exception:
