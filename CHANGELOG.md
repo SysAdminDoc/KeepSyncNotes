@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.10.0] - 2026-06-27
+
+- Added SQLite FTS5 indexing for note titles, body text, checklist item text, and labels.
+- Added ranked FTS search with LIKE fallback when FTS5 is unavailable.
+- Kept the FTS index synchronized on note saves, trash, and permanent deletes.
+
 ## [v1.9.0] - 2026-06-27
 
 - Added delta-aware import summaries for foreground Takeout and external-source imports.

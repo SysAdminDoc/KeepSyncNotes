@@ -187,7 +187,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.10.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -992,8 +992,53 @@ class DatabaseManager:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_archived ON notes(archived)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_trashed ON notes(trashed)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_reminder_at ON notes(reminder_at)")
+
+        self.fts_available = self._init_fts(cursor)
+        if self.fts_available:
+            self._rebuild_fts(cursor)
         
         self.conn.commit()
+
+    def _init_fts(self, cursor: sqlite3.Cursor) -> bool:
+        try:
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts
+                USING fts5(note_id UNINDEXED, title, content, labels)
+            """)
+            return True
+        except sqlite3.OperationalError as e:
+            print(f"FTS5 unavailable: {e}")
+            return False
+
+    def _fts_text(self, note: Note) -> str:
+        if note.note_type == NoteType.CHECKLIST:
+            return "\n".join(item.text for item in note.checklist_items)
+        return note.content or ""
+
+    def _update_fts(self, cursor: sqlite3.Cursor, note: Note):
+        if not getattr(self, "fts_available", False):
+            return
+        cursor.execute("DELETE FROM notes_fts WHERE note_id = ?", (note.id,))
+        if note.trashed:
+            return
+        cursor.execute(
+            "INSERT INTO notes_fts (note_id, title, content, labels) VALUES (?, ?, ?, ?)",
+            (note.id, note.title, self._fts_text(note), " ".join(note.labels))
+        )
+
+    def _delete_fts(self, cursor: sqlite3.Cursor, note_id: str):
+        if getattr(self, "fts_available", False):
+            cursor.execute("DELETE FROM notes_fts WHERE note_id = ?", (note_id,))
+
+    def _rebuild_fts(self, cursor: sqlite3.Cursor):
+        cursor.execute("DELETE FROM notes_fts")
+        cursor.execute("SELECT * FROM notes WHERE trashed = 0")
+        for row in cursor.fetchall():
+            self._update_fts(cursor, self._row_to_note(row))
+
+    def _fts_query(self, query: str) -> str:
+        terms = re.findall(r"[A-Za-z0-9_]+", query or "")
+        return " ".join(f"{term}*" for term in terms)
 
     def _ensure_column(self, table: str, column: str, definition: str):
         cursor = self.conn.cursor()
@@ -1030,6 +1075,7 @@ class DatabaseManager:
                 note.remote_modified.isoformat() if note.remote_modified else None,
                 note.content_hash, note.created_at.isoformat(), note.updated_at.isoformat()
             ))
+            self._update_fts(cursor, note)
             self.conn.commit()
             return True
         except Exception as e:
@@ -1116,11 +1162,27 @@ class DatabaseManager:
     def search_notes(self, query: str) -> List[Note]:
         """Search notes by title or content"""
         cursor = self.conn.cursor()
+        fts_query = self._fts_query(query)
+        if getattr(self, "fts_available", False) and fts_query:
+            try:
+                cursor.execute(
+                    """SELECT notes.*
+                       FROM notes_fts
+                       JOIN notes ON notes.id = notes_fts.note_id
+                       WHERE notes_fts MATCH ?
+                         AND notes.trashed = 0
+                       ORDER BY bm25(notes_fts), notes.pinned DESC, notes.updated_at DESC""",
+                    (fts_query,)
+                )
+                return [self._row_to_note(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                print(f"FTS search failed, falling back to LIKE: {e}")
+
         search_term = f"%{query}%"
         cursor.execute(
-            """SELECT * FROM notes WHERE (title LIKE ? OR content LIKE ?) 
+            """SELECT * FROM notes WHERE (title LIKE ? OR content LIKE ? OR labels LIKE ?) 
                AND trashed = 0 ORDER BY pinned DESC, updated_at DESC""",
-            (search_term, search_term)
+            (search_term, search_term, search_term)
         )
         return [self._row_to_note(row) for row in cursor.fetchall()]
     
@@ -1130,11 +1192,13 @@ class DatabaseManager:
             cursor = self.conn.cursor()
             if permanent:
                 cursor.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+                self._delete_fts(cursor, note_id)
             else:
                 cursor.execute(
                     "UPDATE notes SET trashed = 1, updated_at = ? WHERE id = ?",
                     (datetime.now(timezone.utc).isoformat(), note_id)
                 )
+                self._delete_fts(cursor, note_id)
             self.conn.commit()
             return True
         except Exception as e:
