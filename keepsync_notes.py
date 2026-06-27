@@ -86,12 +86,12 @@ def install_dependencies():
         if missing_required:
             print(f"Required packages to install: {len(missing_required)}")
             for pkg, desc in missing_required:
-                print(f"  • {pkg} - {desc}")
+                print(f"  - {pkg} - {desc}")
         
         if missing_optional:
             print(f"Optional packages to install: {len(missing_optional)}")
             for pkg, desc in missing_optional:
-                print(f"  • {pkg} - {desc}")
+                print(f"  - {pkg} - {desc}")
         
         print()
         print("Installing packages...")
@@ -117,14 +117,14 @@ def install_dependencies():
                     )
                 
                 if result.returncode == 0:
-                    print("✓")
+                    print("OK")
                 else:
-                    print("✗")
+                    print("FAILED")
                     if package in [p for p, _ in missing_required]:
                         print(f"  Error: {result.stderr.strip()}")
                         
             except Exception as e:
-                print(f"✗ ({e})")
+                print(f"FAILED ({e})")
         
         print()
         print("=" * 60)
@@ -181,7 +181,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -302,6 +302,114 @@ def format_reminder_datetime(value: Optional[datetime]) -> str:
     if not value:
         return ""
     return value.astimezone().strftime("%Y-%m-%d %H:%M")
+
+def is_markdown_label(value: Any) -> bool:
+    """Return True when a note label enables markdown preview mode."""
+    return str(value or "").strip().lower() == ".md"
+
+def note_uses_markdown(labels: List[str]) -> bool:
+    return any(is_markdown_label(label) for label in labels)
+
+def split_inline_markdown(text: str) -> List[Dict[str, str]]:
+    """Split a markdown line into display segments with lightweight styles."""
+    pattern = re.compile(r"(`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_)")
+    segments = []
+    cursor = 0
+
+    for match in pattern.finditer(text or ""):
+        if match.start() > cursor:
+            segments.append({"text": text[cursor:match.start()], "style": "plain"})
+
+        if match.group(2) is not None:
+            segments.append({"text": match.group(2), "style": "inline_code"})
+        elif match.group(3) is not None or match.group(4) is not None:
+            segments.append({"text": match.group(3) or match.group(4), "style": "bold"})
+        else:
+            segments.append({"text": match.group(5) or match.group(6), "style": "italic"})
+        cursor = match.end()
+
+    if cursor < len(text or ""):
+        segments.append({"text": text[cursor:], "style": "plain"})
+    return segments
+
+def markdown_preview_blocks(markdown_text: str) -> List[Dict[str, Any]]:
+    """Convert a conservative markdown subset into styled preview blocks."""
+    blocks = []
+    in_code_block = False
+
+    for raw_line in (markdown_text or "").splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            continue
+
+        if in_code_block:
+            blocks.append({
+                "style": "code_block",
+                "segments": [{"text": raw_line, "style": "plain"}],
+            })
+            continue
+
+        if not stripped:
+            blocks.append({"style": "blank", "segments": []})
+            continue
+
+        heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+        if heading:
+            level = min(len(heading.group(1)), 3)
+            blocks.append({
+                "style": f"heading_{level}",
+                "segments": split_inline_markdown(heading.group(2).strip()),
+            })
+            continue
+
+        task = re.match(r"^\s*[-*+]\s+\[([ xX])\]\s+(.+)$", raw_line)
+        if task:
+            mark = "[x]" if task.group(1).lower() == "x" else "[ ]"
+            blocks.append({
+                "style": "task",
+                "segments": split_inline_markdown(f"{mark} {task.group(2).strip()}"),
+            })
+            continue
+
+        bullet = re.match(r"^\s*[-*+]\s+(.+)$", raw_line)
+        if bullet:
+            blocks.append({
+                "style": "list_item",
+                "segments": split_inline_markdown(f"- {bullet.group(1).strip()}"),
+            })
+            continue
+
+        numbered = re.match(r"^\s*(\d+)[.)]\s+(.+)$", raw_line)
+        if numbered:
+            blocks.append({
+                "style": "list_item",
+                "segments": split_inline_markdown(f"{numbered.group(1)}. {numbered.group(2).strip()}"),
+            })
+            continue
+
+        if stripped.startswith(">"):
+            blocks.append({
+                "style": "quote",
+                "segments": split_inline_markdown(stripped.lstrip("> ").strip()),
+            })
+            continue
+
+        blocks.append({
+            "style": "paragraph",
+            "segments": split_inline_markdown(raw_line.strip()),
+        })
+
+    return blocks
+
+def markdown_preview_text(markdown_text: str, limit: int = 150) -> str:
+    preview_parts = []
+    for block in markdown_preview_blocks(markdown_text):
+        text = "".join(segment["text"] for segment in block["segments"]).strip()
+        if text:
+            preview_parts.append(text)
+    preview = " ".join(preview_parts)
+    return preview[:limit] + ("..." if len(preview) > limit else "")
 
 def normalize_people(values: Any) -> List[str]:
     """Normalize shared-with metadata from Takeout/export structures."""
@@ -2567,9 +2675,12 @@ class NoteCard(ctk.CTkFrame):
             if len(self.note.checklist_items) > 3:
                 preview_text += f"\n  +{len(self.note.checklist_items) - 3} more..."
         else:
-            preview_text = self.note.content[:150]
-            if len(self.note.content) > 150:
-                preview_text += "..."
+            if note_uses_markdown(self.note.labels):
+                preview_text = markdown_preview_text(self.note.content)
+            else:
+                preview_text = self.note.content[:150]
+                if len(self.note.content) > 150:
+                    preview_text += "..."
         
         if preview_text:
             self.preview_label = ctk.CTkLabel(
@@ -2628,6 +2739,16 @@ class NoteCard(ctk.CTkFrame):
                 wraplength=250
             )
             self.attachments_label.pack(fill="x", pady=(0, 8))
+
+        if note_uses_markdown(self.note.labels):
+            self.markdown_label = ctk.CTkLabel(
+                self.content_frame,
+                text="Markdown",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=COLORS["accent_cyan"],
+                anchor="w"
+            )
+            self.markdown_label.pack(fill="x", pady=(0, 8))
         
         # Footer with labels and sync status
         footer = ctk.CTkFrame(self.content_frame, fg_color="transparent")
@@ -2887,6 +3008,29 @@ class NoteEditor(ctk.CTkFrame):
         
         # Text editor
         self.text_frame = ctk.CTkFrame(self.content_container, fg_color="transparent")
+
+        self.markdown_mode_var = ctk.StringVar(value="Edit")
+        self.markdown_controls = ctk.CTkFrame(self.text_frame, fg_color="transparent")
+        ctk.CTkLabel(
+            self.markdown_controls,
+            text="Markdown",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=COLORS["accent_cyan"]
+        ).pack(side="left", padx=(0, 10))
+
+        self.markdown_toggle = ctk.CTkSegmentedButton(
+            self.markdown_controls,
+            values=["Edit", "Preview"],
+            variable=self.markdown_mode_var,
+            command=self._set_markdown_mode,
+            selected_color=COLORS["accent_blue"],
+            selected_hover_color=COLORS["accent_blue_hover"],
+            unselected_color=COLORS["bg_medium"],
+            unselected_hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            height=30
+        )
+        self.markdown_toggle.pack(side="right")
         
         self.content_text = ctk.CTkTextbox(
             self.text_frame,
@@ -2899,6 +3043,18 @@ class NoteEditor(ctk.CTkFrame):
         )
         self.content_text.pack(fill="both", expand=True)
         self.content_text.bind("<KeyRelease>", self._on_modify)
+
+        self.markdown_preview = ctk.CTkTextbox(
+            self.text_frame,
+            font=ctk.CTkFont(size=14),
+            fg_color=COLORS["bg_medium"],
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            corner_radius=8,
+            wrap="word"
+        )
+        self._configure_markdown_preview_tags()
         
         # Checklist editor
         self.checklist_frame = ctk.CTkFrame(self.content_container, fg_color="transparent")
@@ -3133,6 +3289,80 @@ class NoteEditor(ctk.CTkFrame):
         """Mark note as modified"""
         self.is_modified = True
 
+    def _markdown_preview_widget(self):
+        return getattr(self.markdown_preview, "_textbox", self.markdown_preview)
+
+    def _configure_markdown_preview_tags(self):
+        widget = self._markdown_preview_widget()
+        widget.tag_configure("paragraph", foreground=COLORS["text_primary"], font=("Segoe UI", 13), spacing3=4)
+        widget.tag_configure("heading_1", foreground=COLORS["text_primary"], font=("Segoe UI", 22, "bold"), spacing1=8, spacing3=6)
+        widget.tag_configure("heading_2", foreground=COLORS["text_primary"], font=("Segoe UI", 18, "bold"), spacing1=8, spacing3=5)
+        widget.tag_configure("heading_3", foreground=COLORS["text_primary"], font=("Segoe UI", 15, "bold"), spacing1=6, spacing3=4)
+        widget.tag_configure("list_item", foreground=COLORS["text_primary"], lmargin1=18, lmargin2=30, spacing3=3)
+        widget.tag_configure("task", foreground=COLORS["text_primary"], lmargin1=18, lmargin2=30, spacing3=3)
+        widget.tag_configure("quote", foreground=COLORS["text_secondary"], lmargin1=18, lmargin2=18, spacing1=4, spacing3=4)
+        widget.tag_configure("code_block", foreground=COLORS["accent_cyan"], background=COLORS["bg_darkest"], font=("Consolas", 12), lmargin1=12, lmargin2=12, spacing1=3, spacing3=3)
+        widget.tag_configure("bold", font=("Segoe UI", 13, "bold"))
+        widget.tag_configure("italic", font=("Segoe UI", 13, "italic"))
+        widget.tag_configure("inline_code", foreground=COLORS["accent_cyan"], background=COLORS["bg_darkest"], font=("Consolas", 12))
+
+    def _markdown_enabled(self) -> bool:
+        return (
+            self.current_note is not None
+            and self.note_type_var.get() == NoteType.NOTE.value
+            and note_uses_markdown(self.current_note.labels)
+        )
+
+    def _set_markdown_mode(self, value: str):
+        self.markdown_mode_var.set(value)
+        self._refresh_markdown_controls()
+
+    def _refresh_markdown_controls(self):
+        if not hasattr(self, "markdown_controls"):
+            return
+
+        self.markdown_controls.pack_forget()
+        self.content_text.pack_forget()
+        self.markdown_preview.pack_forget()
+
+        if not self._markdown_enabled():
+            self.markdown_mode_var.set("Edit")
+            self.content_text.pack(fill="both", expand=True)
+            return
+
+        self.markdown_controls.pack(fill="x", pady=(0, 8))
+        if self.markdown_mode_var.get() == "Preview":
+            self._render_markdown_preview()
+            self.markdown_preview.pack(fill="both", expand=True)
+        else:
+            self.content_text.pack(fill="both", expand=True)
+
+    def _render_markdown_preview(self):
+        widget = self._markdown_preview_widget()
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+
+        for block in markdown_preview_blocks(self.content_text.get("1.0", "end-1c")):
+            segments = block["segments"]
+            if not segments:
+                widget.insert("end", "\n")
+                continue
+
+            line_style = block["style"]
+            for segment in segments:
+                text = segment["text"]
+                if not text:
+                    continue
+                start = widget.index("end-1c")
+                widget.insert("end", text)
+                end = widget.index("end-1c")
+                widget.tag_add(line_style, start, end)
+                if segment["style"] != "plain":
+                    widget.tag_add(segment["style"], start, end)
+            widget.insert("end", "\n")
+
+        widget.configure(state="disabled")
+
     def _select_color(self, color: str):
         """Select a Keep color for the note."""
         self.selected_color = normalize_keep_color(color)
@@ -3254,6 +3484,7 @@ class NoteEditor(ctk.CTkFrame):
         else:
             self.checklist_frame.pack_forget()
             self.text_frame.pack(fill="both", expand=True)
+        self._refresh_markdown_controls()
         self._on_modify()
     
     def _toggle_pin(self):
@@ -3492,6 +3723,8 @@ class NoteEditor(ctk.CTkFrame):
                 command=lambda l=label: self._remove_label(l)
             )
             remove_btn.pack(side="left", padx=(0, 4))
+
+        self._refresh_markdown_controls()
     
     def _save_note(self):
         """Save the current note"""
