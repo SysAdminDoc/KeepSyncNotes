@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.9.0] - 2026-06-27
+
+- Added delta-aware import summaries for foreground Takeout and external-source imports.
+- Reported unchanged/local-kept skips separately from imported notes.
+- Reused duplicate detection so re-imported exports add only new or changed notes.
+
 ## [v1.8.0] - 2026-06-27
 
 - Added foreground import conflict resolution with a unified diff and Keep Local, Use Imported, and Merge choices.

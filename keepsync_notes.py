@@ -187,7 +187,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -5485,23 +5485,37 @@ for you to authorize the app."""
         TokenGeneratorDialog(self, "")
 
     def _save_imported_note(self, note: Note) -> bool:
+        return self._save_imported_note_status(note) in {"imported", "conflict_copy"}
+
+    def _save_imported_note_status(self, note: Note) -> str:
         if not note:
-            return False
+            return "failed"
         conflict = self.db.find_import_conflict(note)
         if conflict:
             if notes_equivalent(conflict, note):
-                return False
+                return "skipped"
             action = ImportConflictDialog(self, conflict, note).result
             if action == "local":
-                return False
+                return "skipped"
             if action == "imported":
                 note.id = conflict.id
                 note.created_at = conflict.created_at
                 note.keep_id = conflict.keep_id
-                return self.db.save_imported_note(note, conflict_policy="replace") in {"imported", "skipped"}
+                return self.db.save_imported_note(note, conflict_policy="replace")
             if action == "merge":
-                return self.db.save_imported_note(note, conflict_policy="merge") in {"imported", "skipped"}
-        return self.db.save_imported_note(note, conflict_policy="copy") in {"imported", "conflict_copy"}
+                return self.db.save_imported_note(note, conflict_policy="merge")
+        return self.db.save_imported_note(note, conflict_policy="copy")
+
+    def _show_import_summary(self, source: str, statuses: List[str]):
+        imported = sum(1 for status in statuses if status in {"imported", "conflict_copy"})
+        skipped = statuses.count("skipped")
+        failed = statuses.count("failed")
+        lines = [f"Imported {imported} notes from {source}."]
+        if skipped:
+            lines.append(f"Skipped unchanged/local-kept notes: {skipped}")
+        if failed:
+            lines.append(f"Failed notes: {failed}")
+        messagebox.showinfo("Import Complete", "\n".join(lines))
     
     def _export_notes(self):
         """Export notes to JSON"""
@@ -5546,11 +5560,8 @@ for you to authorize the app."""
         try:
             importer = MultiSourceImporter(self.db)
             notes = importer.import_external(source_type, Path(selected))
-            imported = sum(1 for note in notes if self._save_imported_note(note))
-            messagebox.showinfo(
-                "Import Complete",
-                f"Imported {imported} notes from {source_type}"
-            )
+            statuses = [self._save_imported_note_status(note) for note in notes]
+            self._show_import_summary(source_type, statuses)
         except Exception as e:
             messagebox.showerror("Import Failed", str(e))
     
@@ -5753,12 +5764,8 @@ for you to authorize the app."""
             )
             return
 
-        imported = sum(1 for note in notes if self._save_imported_note(note))
-        
-        messagebox.showinfo(
-            "Import Complete",
-            f"Imported {imported} notes from Google Takeout!"
-        )
+        statuses = [self._save_imported_note_status(note) for note in notes]
+        self._show_import_summary("Google Takeout", statuses)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
