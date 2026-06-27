@@ -1,6 +1,6 @@
 # KeepSyncNotes
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Version](https://img.shields.io/badge/version-1.4.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Language](https://img.shields.io/badge/language-Python-3776AB)
 ![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
@@ -23,6 +23,7 @@ Dependencies auto-install on first run. No manual `pip install` needed.
 - **Keep Colors & Pins** — Preserve Keep note colors, show color swatches in cards, and pin notes to the top
 - **Reminders** — Store local date/time reminders, optional location context, and desktop notifications when available
 - **Sharing Metadata** — Preserve imported "shared with" collaborator metadata without re-sharing notes
+- **Attachments** — Copy imported Keep media locally and show image thumbnails inline
 - **Full-Text Search** — Instant search across all note titles and content
 - **Tag & Label System** — Filter notes by the labels synced from Google Keep
 - **Note Editor** — Create, edit, and delete notes locally after import

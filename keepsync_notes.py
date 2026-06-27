@@ -152,6 +152,8 @@ import time
 import os
 import sys
 import re
+import mimetypes
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
@@ -179,7 +181,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -338,6 +340,102 @@ def extract_shared_with(data: dict) -> List[str]:
         shared.append("Shared")
     return shared
 
+def sanitize_filename(value: str) -> str:
+    name = Path(value or "attachment").name
+    return re.sub(r"[^A-Za-z0-9._ -]+", "_", name).strip(" .") or "attachment"
+
+def guess_attachment_mime(path: str, fallback: str = "") -> str:
+    guessed, _ = mimetypes.guess_type(path or "")
+    return fallback or guessed or "application/octet-stream"
+
+def first_present(data: dict, keys: List[str]) -> str:
+    for key in keys:
+        value = data.get(key)
+        if value:
+            return str(value)
+    return ""
+
+def takeout_attachment_specs(data: dict) -> List[dict]:
+    specs = []
+    for key in ("attachments", "media", "files", "blobs"):
+        value = data.get(key)
+        if isinstance(value, dict):
+            specs.append(value)
+        elif isinstance(value, list):
+            specs.extend([item for item in value if isinstance(item, (dict, str))])
+
+    for key in ("drawingInfo", "audio", "image"):
+        value = data.get(key)
+        if isinstance(value, dict):
+            specs.append(value)
+    return specs
+
+def resolve_takeout_attachment_path(source: str, base_path: Optional[Path]) -> Optional[Path]:
+    if not source or re.match(r"^[a-z]+://", source, re.IGNORECASE):
+        return None
+
+    source_path = Path(source)
+    candidates = [source_path]
+    if base_path:
+        candidates.extend([
+            base_path / source_path,
+            base_path / source_path.name,
+            base_path.parent / source_path,
+        ])
+
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+def copy_attachment_to_store(source_path: Path, attachments_root: Path, note_id: str, filename: str) -> Path:
+    note_dir = attachments_root / note_id
+    note_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = sanitize_filename(filename or source_path.name)
+    destination = note_dir / safe_name
+    stem = destination.stem
+    suffix = destination.suffix
+    counter = 1
+    while destination.exists():
+        destination = note_dir / f"{stem}-{counter}{suffix}"
+        counter += 1
+    shutil.copy2(source_path, destination)
+    return destination
+
+def import_takeout_attachments(data: dict, base_path: Optional[Path], attachments_root: Path, note_id: str) -> List["Attachment"]:
+    attachments = []
+    for raw in takeout_attachment_specs(data):
+        if isinstance(raw, str):
+            source = raw
+            filename = Path(raw).name
+            mime_type = guess_attachment_mime(filename)
+        else:
+            source = first_present(raw, [
+                "filePath", "path", "sourcePath", "url", "filename", "fileName",
+                "drawingFilePath", "snapshotFilePath", "audioFilePath"
+            ])
+            filename = first_present(raw, ["filename", "fileName", "name", "title"]) or Path(source).name
+            mime_type = first_present(raw, ["mimeType", "mimetype", "contentType"])
+
+        if not source and not filename:
+            continue
+
+        resolved = resolve_takeout_attachment_path(source, base_path)
+        stored_path = source
+        if resolved:
+            stored_path = str(copy_attachment_to_store(resolved, attachments_root, note_id, filename))
+
+        attachments.append(Attachment(
+            filename=filename or Path(stored_path).name,
+            stored_path=stored_path,
+            source_path=str(resolved or source),
+            mime_type=guess_attachment_mime(stored_path or filename, mime_type),
+        ))
+    return attachments
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA MODELS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -354,6 +452,45 @@ class SyncStatus(Enum):
 class NoteType(Enum):
     NOTE = "note"
     CHECKLIST = "checklist"
+
+@dataclass
+class Attachment:
+    filename: str
+    stored_path: str
+    mime_type: str = ""
+    source_path: str = ""
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+    def __post_init__(self):
+        self.filename = sanitize_filename(self.filename)
+        self.mime_type = guess_attachment_mime(self.stored_path or self.filename, self.mime_type)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "filename": self.filename,
+            "stored_path": self.stored_path,
+            "source_path": self.source_path,
+            "mime_type": self.mime_type,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Attachment":
+        return cls(
+            id=data.get("id", str(uuid.uuid4())),
+            filename=data.get("filename", Path(data.get("stored_path", "attachment")).name),
+            stored_path=data.get("stored_path", ""),
+            source_path=data.get("source_path", ""),
+            mime_type=data.get("mime_type", ""),
+        )
+
+    @property
+    def is_image(self) -> bool:
+        return self.mime_type.startswith("image/")
+
+    @property
+    def exists(self) -> bool:
+        return bool(self.stored_path and Path(self.stored_path).exists())
 
 @dataclass
 class ChecklistItem:
@@ -390,6 +527,7 @@ class Note:
     reminder_location: str = ""
     reminder_notified: bool = False
     shared_with: List[str] = field(default_factory=list)
+    attachments: List[Attachment] = field(default_factory=list)
     
     # Sync metadata
     keep_id: Optional[str] = None
@@ -405,6 +543,7 @@ class Note:
     def __post_init__(self):
         self.color = normalize_keep_color(self.color)
         self.shared_with = normalize_people(self.shared_with)
+        self.attachments = [Attachment.from_dict(a) if isinstance(a, dict) else a for a in self.attachments]
         for item in self.checklist_items:
             item.indent = clamp_checklist_indent(item.indent)
         self.update_hash()
@@ -415,7 +554,7 @@ class Note:
             f"{self.title}|{self.content}|{json.dumps([i.to_dict() for i in self.checklist_items])}|"
             f"{json.dumps(self.labels)}|{self.pinned}|{self.archived}|{self.trashed}|{self.color}|"
             f"{self.reminder_at.isoformat() if self.reminder_at else ''}|{self.reminder_location}|"
-            f"{json.dumps(self.shared_with)}"
+            f"{json.dumps(self.shared_with)}|{json.dumps([a.to_dict() for a in self.attachments])}"
         )
         self.content_hash = hashlib.md5(content.encode()).hexdigest()
     
@@ -435,6 +574,7 @@ class Note:
             "reminder_location": self.reminder_location,
             "reminder_notified": self.reminder_notified,
             "shared_with": self.shared_with,
+            "attachments": [a.to_dict() for a in self.attachments],
             "keep_id": self.keep_id,
             "sync_status": self.sync_status.value,
             "local_modified": self.local_modified.isoformat() if self.local_modified else None,
@@ -461,6 +601,7 @@ class Note:
             reminder_location=data.get("reminder_location", ""),
             reminder_notified=data.get("reminder_notified", False),
             shared_with=normalize_people(data.get("shared_with", [])),
+            attachments=[Attachment.from_dict(a) for a in data.get("attachments", [])],
             keep_id=data.get("keep_id"),
             sync_status=SyncStatus(data.get("sync_status", "local_only")),
             local_modified=datetime.fromisoformat(data["local_modified"]) if data.get("local_modified") else None,
@@ -526,6 +667,7 @@ class DatabaseManager:
                 reminder_location TEXT DEFAULT '',
                 reminder_notified INTEGER DEFAULT 0,
                 shared_with TEXT DEFAULT '[]',
+                attachments TEXT DEFAULT '[]',
                 keep_id TEXT,
                 sync_status TEXT DEFAULT 'local_only',
                 local_modified TEXT,
@@ -540,6 +682,7 @@ class DatabaseManager:
         self._ensure_column("notes", "reminder_location", "TEXT DEFAULT ''")
         self._ensure_column("notes", "reminder_notified", "INTEGER DEFAULT 0")
         self._ensure_column("notes", "shared_with", "TEXT DEFAULT '[]'")
+        self._ensure_column("notes", "attachments", "TEXT DEFAULT '[]'")
         
         # Labels table
         cursor.execute("""
@@ -599,9 +742,9 @@ class DatabaseManager:
                 INSERT OR REPLACE INTO notes 
                 (id, title, content, note_type, checklist_items, labels, pinned, archived, 
                  trashed, color, reminder_at, reminder_location, reminder_notified,
-                 shared_with, keep_id, sync_status, local_modified, remote_modified,
+                 shared_with, attachments, keep_id, sync_status, local_modified, remote_modified,
                  content_hash, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 note.id, note.title, note.content, note.note_type.value,
                 json.dumps([i.to_dict() for i in note.checklist_items]),
@@ -610,6 +753,7 @@ class DatabaseManager:
                 note.reminder_at.isoformat() if note.reminder_at else None,
                 note.reminder_location, int(note.reminder_notified),
                 json.dumps(note.shared_with),
+                json.dumps([a.to_dict() for a in note.attachments]),
                 note.keep_id, note.sync_status.value,
                 note.local_modified.isoformat() if note.local_modified else None,
                 note.remote_modified.isoformat() if note.remote_modified else None,
@@ -740,6 +884,7 @@ class DatabaseManager:
             reminder_location=row["reminder_location"] or "",
             reminder_notified=bool(row["reminder_notified"]),
             shared_with=normalize_people(json.loads(row["shared_with"] or "[]")),
+            attachments=[Attachment.from_dict(a) for a in json.loads(row["attachments"] or "[]")],
             keep_id=row["keep_id"],
             sync_status=SyncStatus(row["sync_status"]) if row["sync_status"] else SyncStatus.LOCAL_ONLY,
             local_modified=datetime.fromisoformat(row["local_modified"]) if row["local_modified"] else None,
@@ -2465,6 +2610,24 @@ class NoteCard(ctk.CTkFrame):
                 wraplength=250
             )
             self.shared_label.pack(fill="x", pady=(0, 8))
+
+        if self.note.attachments:
+            image_count = sum(1 for attachment in self.note.attachments if attachment.is_image)
+            other_count = len(self.note.attachments) - image_count
+            parts = []
+            if image_count:
+                parts.append(f"{image_count} image{'s' if image_count != 1 else ''}")
+            if other_count:
+                parts.append(f"{other_count} file{'s' if other_count != 1 else ''}")
+            self.attachments_label = ctk.CTkLabel(
+                self.content_frame,
+                text="Attachments: " + ", ".join(parts),
+                font=ctk.CTkFont(size=11),
+                text_color=COLORS["accent_blue"],
+                anchor="w",
+                wraplength=250
+            )
+            self.attachments_label.pack(fill="x", pady=(0, 8))
         
         # Footer with labels and sync status
         footer = ctk.CTkFrame(self.content_frame, fg_color="transparent")
@@ -2863,6 +3026,20 @@ class NoteEditor(ctk.CTkFrame):
             wraplength=520
         )
         self.shared_display.pack(fill="x", pady=(4, 0))
+
+        attachments_section = ctk.CTkFrame(editor_frame, fg_color="transparent")
+        attachments_section.pack(fill="x", pady=(12, 0))
+
+        ctk.CTkLabel(
+            attachments_section,
+            text="Attachments",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=COLORS["text_secondary"]
+        ).pack(anchor="w")
+
+        self.attachments_frame = ctk.CTkFrame(attachments_section, fg_color="transparent")
+        self.attachments_frame.pack(fill="x", pady=(4, 0))
+        self.attachment_images = []
         
         # Advanced options (collapsible)
         self.advanced_frame = ctk.CTkFrame(editor_frame, fg_color="transparent")
@@ -2912,6 +3089,7 @@ class NoteEditor(ctk.CTkFrame):
             self.reminder_location_entry.delete(0, "end")
             self.reminder_location_entry.insert(0, note.reminder_location)
             self._load_shared_with(note.shared_with)
+            self._load_attachments(note.attachments)
             
             self._load_labels(note.labels)
             self.sync_badge.update_status(note.sync_status)
@@ -2944,6 +3122,7 @@ class NoteEditor(ctk.CTkFrame):
             self._load_labels([])
             self._clear_reminder(mark_modified=False)
             self._load_shared_with([])
+            self._load_attachments([])
             self.sync_badge.update_status(SyncStatus.LOCAL_ONLY)
             self.unlink_btn.pack_forget()
             self.pin_btn.configure(image=IconManager.get_icon("pin", 18, COLORS["text_secondary"]))
@@ -2990,6 +3169,82 @@ class NoteEditor(ctk.CTkFrame):
                 text="Not shared",
                 text_color=COLORS["text_muted"]
             )
+
+    def _load_attachments(self, attachments: List[Attachment]):
+        """Render imported attachments in the editor."""
+        for widget in self.attachments_frame.winfo_children():
+            widget.destroy()
+        self.attachment_images.clear()
+
+        if not attachments:
+            ctk.CTkLabel(
+                self.attachments_frame,
+                text="No attachments",
+                font=ctk.CTkFont(size=12),
+                text_color=COLORS["text_muted"],
+                anchor="w"
+            ).pack(anchor="w")
+            return
+
+        for attachment in attachments:
+            row = ctk.CTkFrame(self.attachments_frame, fg_color=COLORS["bg_medium"], corner_radius=8)
+            row.pack(fill="x", pady=(0, 6))
+
+            if attachment.is_image and attachment.exists:
+                try:
+                    image = Image.open(attachment.stored_path)
+                    image.thumbnail((180, 120))
+                    ctk_image = ctk.CTkImage(light_image=image.copy(), dark_image=image.copy(), size=image.size)
+                    self.attachment_images.append(ctk_image)
+                    preview = ctk.CTkLabel(row, text="", image=ctk_image)
+                    preview.pack(side="left", padx=8, pady=8)
+                except Exception:
+                    pass
+
+            details = ctk.CTkFrame(row, fg_color="transparent")
+            details.pack(side="left", fill="x", expand=True, padx=8, pady=8)
+
+            ctk.CTkLabel(
+                details,
+                text=attachment.filename,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=COLORS["text_primary"],
+                anchor="w"
+            ).pack(fill="x")
+
+            ctk.CTkLabel(
+                details,
+                text=attachment.mime_type,
+                font=ctk.CTkFont(size=11),
+                text_color=COLORS["text_muted"],
+                anchor="w"
+            ).pack(fill="x")
+
+            open_btn = ctk.CTkButton(
+                row,
+                text="Open",
+                font=ctk.CTkFont(size=12),
+                width=58,
+                height=30,
+                fg_color="transparent",
+                hover_color=COLORS["bg_hover"],
+                text_color=COLORS["accent_blue"],
+                command=lambda item=attachment: self._open_attachment(item)
+            )
+            open_btn.pack(side="right", padx=8)
+
+    def _open_attachment(self, attachment: Attachment):
+        """Open an attachment with the system default handler."""
+        target = attachment.stored_path
+        try:
+            path = Path(target)
+            if path.exists():
+                webbrowser.open(path.resolve().as_uri())
+                return
+        except (OSError, ValueError):
+            pass
+        if target:
+            webbrowser.open(target)
     
     def _on_type_change(self):
         """Switch between text and checklist editor"""
@@ -4400,7 +4655,7 @@ for you to authorize the app."""
                 # Check if this is a Google Takeout export
                 if isinstance(data, dict) and "textContent" in data:
                     # Single Google Keep note from Takeout
-                    note = self._parse_takeout_note(data)
+                    note = self._parse_takeout_note(data, Path(filepath).parent)
                     if note and self.db.save_note(note):
                         imported = 1
                 elif isinstance(data, list):
@@ -4409,7 +4664,7 @@ for you to authorize the app."""
                         if isinstance(item, dict):
                             if "textContent" in item or "title" in item:
                                 # Takeout format
-                                note = self._parse_takeout_note(item)
+                                note = self._parse_takeout_note(item, Path(filepath).parent)
                             else:
                                 # Our export format
                                 note = Note.from_dict(item)
@@ -4434,9 +4689,10 @@ for you to authorize the app."""
             except Exception as e:
                 messagebox.showerror("Import Failed", str(e))
     
-    def _parse_takeout_note(self, data: dict) -> Optional[Note]:
+    def _parse_takeout_note(self, data: dict, base_path: Optional[Path] = None) -> Optional[Note]:
         """Parse a Google Takeout Keep note format"""
         try:
+            note_id = str(uuid.uuid4())
             title = data.get("title", "")
             content = data.get("textContent", "")
             
@@ -4453,14 +4709,18 @@ for you to authorize the app."""
             labels = []
             if "labels" in data:
                 labels = [l.get("name", "") for l in data["labels"] if l.get("name")]
+
+            attachments_root = Path(self.db.db_path).parent / "attachments"
+            attachments = import_takeout_attachments(data, base_path, attachments_root, note_id)
             
             return Note(
-                id=str(uuid.uuid4()),
+                id=note_id,
                 title=title,
                 content=content,
                 note_type=NoteType.CHECKLIST if checklist_items else NoteType.NOTE,
                 checklist_items=checklist_items,
                 labels=labels,
+                attachments=attachments,
                 pinned=data.get("isPinned", False),
                 archived=data.get("isArchived", False),
                 trashed=data.get("isTrashed", False),
@@ -4590,7 +4850,7 @@ for you to authorize the app."""
                 with open(json_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 
-                note = self._parse_takeout_note(data)
+                note = self._parse_takeout_note(data, json_file.parent)
                 if note and self.db.save_note(note):
                     imported += 1
                 else:
