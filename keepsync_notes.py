@@ -35,6 +35,7 @@ def install_dependencies():
         "gkeepapi": ("gkeepapi", "Google Keep sync", False),  # Optional
         "gpsoauth": ("gpsoauth", "Google auth tokens", False),  # Optional, for token generation
         "browser-cookie3": ("browser_cookie3", "Browser cookie extraction", False),  # Optional
+        "plyer": ("plyer", "Desktop notifications", False),  # Optional
         "PyGithub": ("github", "GitHub API client", False),  # Optional, for GitHub sync
         "google-api-python-client": ("googleapiclient", "Google API client", False),  # Optional, for Drive sync
         "google-auth-oauthlib": ("google_auth_oauthlib", "Google OAuth", False),  # Optional, for Drive sync
@@ -166,12 +167,19 @@ try:
 except ImportError:
     GKEEPAPI_AVAILABLE = False
 
+try:
+    from plyer import notification as desktop_notification
+    DESKTOP_NOTIFICATIONS_AVAILABLE = True
+except ImportError:
+    desktop_notification = None
+    DESKTOP_NOTIFICATIONS_AVAILABLE = False
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION & CONSTANTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -258,6 +266,41 @@ def clamp_checklist_indent(value: Any) -> int:
         indent = 0
     return max(0, min(4, indent))
 
+def parse_reminder_datetime(value: str) -> Optional[datetime]:
+    text = (value or "").strip()
+    if not text:
+        return None
+
+    candidates = [text, text.replace("T", " ")]
+    for candidate in candidates:
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            break
+        except ValueError:
+            parsed = None
+    else:
+        parsed = None
+
+    if parsed is None:
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+
+    if parsed is None:
+        raise ValueError("Use YYYY-MM-DD HH:MM for reminders.")
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return parsed.astimezone(timezone.utc)
+
+def format_reminder_datetime(value: Optional[datetime]) -> str:
+    if not value:
+        return ""
+    return value.astimezone().strftime("%Y-%m-%d %H:%M")
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA MODELS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -306,6 +349,9 @@ class Note:
     archived: bool = False
     trashed: bool = False
     color: str = ""
+    reminder_at: Optional[datetime] = None
+    reminder_location: str = ""
+    reminder_notified: bool = False
     
     # Sync metadata
     keep_id: Optional[str] = None
@@ -328,7 +374,8 @@ class Note:
         """Generate content hash for change detection"""
         content = (
             f"{self.title}|{self.content}|{json.dumps([i.to_dict() for i in self.checklist_items])}|"
-            f"{json.dumps(self.labels)}|{self.pinned}|{self.archived}|{self.trashed}|{self.color}"
+            f"{json.dumps(self.labels)}|{self.pinned}|{self.archived}|{self.trashed}|{self.color}|"
+            f"{self.reminder_at.isoformat() if self.reminder_at else ''}|{self.reminder_location}"
         )
         self.content_hash = hashlib.md5(content.encode()).hexdigest()
     
@@ -344,6 +391,9 @@ class Note:
             "archived": self.archived,
             "trashed": self.trashed,
             "color": self.color,
+            "reminder_at": self.reminder_at.isoformat() if self.reminder_at else None,
+            "reminder_location": self.reminder_location,
+            "reminder_notified": self.reminder_notified,
             "keep_id": self.keep_id,
             "sync_status": self.sync_status.value,
             "local_modified": self.local_modified.isoformat() if self.local_modified else None,
@@ -366,6 +416,9 @@ class Note:
             archived=data.get("archived", False),
             trashed=data.get("trashed", False),
             color=normalize_keep_color(data.get("color", "")),
+            reminder_at=datetime.fromisoformat(data["reminder_at"]) if data.get("reminder_at") else None,
+            reminder_location=data.get("reminder_location", ""),
+            reminder_notified=data.get("reminder_notified", False),
             keep_id=data.get("keep_id"),
             sync_status=SyncStatus(data.get("sync_status", "local_only")),
             local_modified=datetime.fromisoformat(data["local_modified"]) if data.get("local_modified") else None,
@@ -427,6 +480,9 @@ class DatabaseManager:
                 archived INTEGER DEFAULT 0,
                 trashed INTEGER DEFAULT 0,
                 color TEXT DEFAULT '',
+                reminder_at TEXT,
+                reminder_location TEXT DEFAULT '',
+                reminder_notified INTEGER DEFAULT 0,
                 keep_id TEXT,
                 sync_status TEXT DEFAULT 'local_only',
                 local_modified TEXT,
@@ -436,6 +492,10 @@ class DatabaseManager:
                 updated_at TEXT
             )
         """)
+
+        self._ensure_column("notes", "reminder_at", "TEXT")
+        self._ensure_column("notes", "reminder_location", "TEXT DEFAULT ''")
+        self._ensure_column("notes", "reminder_notified", "INTEGER DEFAULT 0")
         
         # Labels table
         cursor.execute("""
@@ -473,8 +533,16 @@ class DatabaseManager:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes(pinned)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_archived ON notes(archived)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_trashed ON notes(trashed)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_reminder_at ON notes(reminder_at)")
         
         self.conn.commit()
+
+    def _ensure_column(self, table: str, column: str, definition: str):
+        cursor = self.conn.cursor()
+        cursor.execute(f"PRAGMA table_info({table})")
+        existing = {row["name"] for row in cursor.fetchall()}
+        if column not in existing:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
     
     def save_note(self, note: Note) -> bool:
         """Save or update a note"""
@@ -486,14 +554,18 @@ class DatabaseManager:
             cursor.execute("""
                 INSERT OR REPLACE INTO notes 
                 (id, title, content, note_type, checklist_items, labels, pinned, archived, 
-                 trashed, color, keep_id, sync_status, local_modified, remote_modified, 
+                 trashed, color, reminder_at, reminder_location, reminder_notified,
+                 keep_id, sync_status, local_modified, remote_modified,
                  content_hash, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 note.id, note.title, note.content, note.note_type.value,
                 json.dumps([i.to_dict() for i in note.checklist_items]),
                 json.dumps(note.labels), int(note.pinned), int(note.archived),
-                int(note.trashed), note.color, note.keep_id, note.sync_status.value,
+                int(note.trashed), note.color,
+                note.reminder_at.isoformat() if note.reminder_at else None,
+                note.reminder_location, int(note.reminder_notified),
+                note.keep_id, note.sync_status.value,
                 note.local_modified.isoformat() if note.local_modified else None,
                 note.remote_modified.isoformat() if note.remote_modified else None,
                 note.content_hash, note.created_at.isoformat(), note.updated_at.isoformat()
@@ -576,6 +648,35 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error restoring note: {e}")
             return False
+
+    def get_due_reminders(self, now: Optional[datetime] = None) -> List[Note]:
+        """Get notes with reminders that should fire."""
+        cursor = self.conn.cursor()
+        due_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+        cursor.execute(
+            """SELECT * FROM notes
+               WHERE reminder_at IS NOT NULL
+                 AND reminder_at <= ?
+                 AND reminder_notified = 0
+                 AND trashed = 0
+               ORDER BY reminder_at ASC""",
+            (due_at,)
+        )
+        return [self._row_to_note(row) for row in cursor.fetchall()]
+
+    def mark_reminder_notified(self, note_id: str) -> bool:
+        """Mark a reminder notification as delivered."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "UPDATE notes SET reminder_notified = 1, updated_at = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), note_id)
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error marking reminder notified: {e}")
+            return False
     
     def _row_to_note(self, row: sqlite3.Row) -> Note:
         """Convert database row to Note object"""
@@ -590,6 +691,9 @@ class DatabaseManager:
             archived=bool(row["archived"]),
             trashed=bool(row["trashed"]),
             color=normalize_keep_color(row["color"] or ""),
+            reminder_at=datetime.fromisoformat(row["reminder_at"]) if row["reminder_at"] else None,
+            reminder_location=row["reminder_location"] or "",
+            reminder_notified=bool(row["reminder_notified"]),
             keep_id=row["keep_id"],
             sync_status=SyncStatus(row["sync_status"]) if row["sync_status"] else SyncStatus.LOCAL_ONLY,
             local_modified=datetime.fromisoformat(row["local_modified"]) if row["local_modified"] else None,
@@ -2268,6 +2372,20 @@ class NoteCard(ctk.CTkFrame):
                 wraplength=250
             )
             self.preview_label.pack(fill="x", pady=(0, 8))
+
+        if self.note.reminder_at:
+            reminder_text = f"Reminder: {format_reminder_datetime(self.note.reminder_at)}"
+            if self.note.reminder_location:
+                reminder_text += f" @ {self.note.reminder_location}"
+            self.reminder_label = ctk.CTkLabel(
+                self.content_frame,
+                text=reminder_text,
+                font=ctk.CTkFont(size=11),
+                text_color=COLORS["accent_yellow"],
+                anchor="w",
+                wraplength=250
+            )
+            self.reminder_label.pack(fill="x", pady=(0, 8))
         
         # Footer with labels and sync status
         footer = ctk.CTkFrame(self.content_frame, fg_color="transparent")
@@ -2593,6 +2711,58 @@ class NoteEditor(ctk.CTkFrame):
         
         self.labels_display = ctk.CTkFrame(self.labels_frame, fg_color="transparent")
         self.labels_display.pack(side="left", fill="x", expand=True, padx=(8, 0))
+
+        # Reminder section
+        reminder_section = ctk.CTkFrame(editor_frame, fg_color="transparent")
+        reminder_section.pack(fill="x", pady=(12, 0))
+
+        ctk.CTkLabel(
+            reminder_section,
+            text="Reminder",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=COLORS["text_secondary"]
+        ).pack(anchor="w")
+
+        reminder_inputs = ctk.CTkFrame(reminder_section, fg_color="transparent")
+        reminder_inputs.pack(fill="x", pady=(4, 0))
+
+        self.reminder_entry = ctk.CTkEntry(
+            reminder_inputs,
+            placeholder_text="YYYY-MM-DD HH:MM",
+            font=ctk.CTkFont(size=12),
+            width=150,
+            height=30,
+            fg_color=COLORS["bg_medium"],
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        self.reminder_entry.pack(side="left")
+        self.reminder_entry.bind("<KeyRelease>", self._on_modify)
+
+        self.reminder_location_entry = ctk.CTkEntry(
+            reminder_inputs,
+            placeholder_text="Optional location",
+            font=ctk.CTkFont(size=12),
+            height=30,
+            fg_color=COLORS["bg_medium"],
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        self.reminder_location_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        self.reminder_location_entry.bind("<KeyRelease>", self._on_modify)
+
+        self.clear_reminder_btn = ctk.CTkButton(
+            reminder_inputs,
+            text="Clear",
+            font=ctk.CTkFont(size=12),
+            width=58,
+            height=30,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_secondary"],
+            command=self._clear_reminder
+        )
+        self.clear_reminder_btn.pack(side="left", padx=(8, 0))
         
         # Advanced options (collapsible)
         self.advanced_frame = ctk.CTkFrame(editor_frame, fg_color="transparent")
@@ -2636,6 +2806,11 @@ class NoteEditor(ctk.CTkFrame):
 
             self.selected_color = normalize_keep_color(note.color)
             self._refresh_color_buttons()
+
+            self.reminder_entry.delete(0, "end")
+            self.reminder_entry.insert(0, format_reminder_datetime(note.reminder_at))
+            self.reminder_location_entry.delete(0, "end")
+            self.reminder_location_entry.insert(0, note.reminder_location)
             
             self._load_labels(note.labels)
             self.sync_badge.update_status(note.sync_status)
@@ -2666,6 +2841,7 @@ class NoteEditor(ctk.CTkFrame):
             self._refresh_color_buttons()
             self._clear_checklist_items()
             self._load_labels([])
+            self._clear_reminder(mark_modified=False)
             self.sync_badge.update_status(SyncStatus.LOCAL_ONLY)
             self.unlink_btn.pack_forget()
             self.pin_btn.configure(image=IconManager.get_icon("pin", 18, COLORS["text_secondary"]))
@@ -2692,6 +2868,13 @@ class NoteEditor(ctk.CTkFrame):
                 border_color=COLORS["text_primary"] if is_selected else COLORS["border"],
                 border_width=3 if is_selected else 2
             )
+
+    def _clear_reminder(self, mark_modified: bool = True):
+        """Clear reminder inputs."""
+        self.reminder_entry.delete(0, "end")
+        self.reminder_location_entry.delete(0, "end")
+        if mark_modified:
+            self._on_modify()
     
     def _on_type_change(self):
         """Switch between text and checklist editor"""
@@ -2949,6 +3132,17 @@ class NoteEditor(ctk.CTkFrame):
         self.current_note.title = self.title_entry.get()
         self.current_note.note_type = NoteType(self.note_type_var.get())
         self.current_note.color = self.selected_color
+        previous_reminder = self.current_note.reminder_at
+
+        try:
+            self.current_note.reminder_at = parse_reminder_datetime(self.reminder_entry.get())
+        except ValueError as e:
+            messagebox.showerror("Invalid Reminder", str(e))
+            return
+
+        self.current_note.reminder_location = self.reminder_location_entry.get().strip()
+        if self.current_note.reminder_at != previous_reminder:
+            self.current_note.reminder_notified = False
         
         if self.current_note.note_type == NoteType.CHECKLIST:
             self.current_note.checklist_items = [
@@ -4328,6 +4522,7 @@ class KeepSyncNotesApp(ctk.CTk):
         self.current_filter = "all"  # all, archived, trash, label:<name>
         self.search_query = ""
         self.selected_note: Optional[Note] = None
+        self._reminder_after_id = None
         
         # Build UI
         self._build_ui()
@@ -4340,6 +4535,7 @@ class KeepSyncNotesApp(ctk.CTk):
         
         # Load notes
         self._refresh_notes_list()
+        self._schedule_reminder_check(delay_ms=1000)
         
         # Start auto-sync if enabled
         if self.db.get_setting("auto_sync", True):
@@ -4880,9 +5076,57 @@ class KeepSyncNotesApp(ctk.CTk):
         else:
             self.sync_status_label.configure(text="Sync error", text_color=COLORS["accent_red"])
         self._refresh_notes_list()
+
+    def _schedule_reminder_check(self, delay_ms: int = 60000):
+        """Schedule the next due-reminder check."""
+        self._reminder_after_id = self.after(delay_ms, self._check_due_reminders)
+
+    def _check_due_reminders(self):
+        """Notify for due reminders."""
+        try:
+            due_notes = self.db.get_due_reminders()
+            for note in due_notes:
+                self._notify_reminder(note)
+                self.db.mark_reminder_notified(note.id)
+            if due_notes:
+                self._refresh_notes_list()
+        finally:
+            self._schedule_reminder_check()
+
+    def _notify_reminder(self, note: Note):
+        """Show a desktop reminder notification when possible."""
+        title = note.title or "Untitled"
+        message = note.content[:160] if note.content else ""
+        if note.note_type == NoteType.CHECKLIST and note.checklist_items:
+            remaining = [item.text for item in note.checklist_items if not item.checked]
+            message = ", ".join(remaining[:3]) or "Checklist complete"
+        if note.reminder_location:
+            message = f"{message}\nLocation: {note.reminder_location}" if message else f"Location: {note.reminder_location}"
+
+        notified = False
+        if DESKTOP_NOTIFICATIONS_AVAILABLE:
+            try:
+                desktop_notification.notify(
+                    title=f"{APP_NAME}: {title}",
+                    message=message or "Reminder due",
+                    app_name=APP_NAME,
+                    timeout=10
+                )
+                notified = True
+            except Exception as e:
+                self.db.log_sync("reminder", note.id, "error", str(e))
+
+        self.sync_status_label.configure(
+            text=f"Reminder: {title[:24]}",
+            text_color=COLORS["accent_yellow"]
+        )
+        if not notified:
+            self.bell()
     
     def on_closing(self):
         """Handle window close"""
+        if self._reminder_after_id:
+            self.after_cancel(self._reminder_after_id)
         self.sync_engine.stop_auto_sync()
         self.cloud_sync.stop_auto_sync()
         self.db.close()
