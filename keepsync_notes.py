@@ -187,7 +187,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.11.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -881,6 +881,65 @@ def merge_note_conflict(local_note: Note, imported_note: Note) -> Note:
         ).strip()
     merged.checklist_items = []
     return merged
+
+def default_advanced_filters() -> Dict[str, Any]:
+    return {
+        "mode": "AND",
+        "label": "",
+        "color": "",
+        "date_from": "",
+        "date_to": "",
+        "has_image": False,
+        "has_checklist": False,
+        "is_archived": False,
+    }
+
+def advanced_filters_active(filters: Dict[str, Any]) -> bool:
+    defaults = default_advanced_filters()
+    return any(filters.get(key) != value for key, value in defaults.items() if key != "mode")
+
+def parse_filter_date(value: str) -> Optional[datetime]:
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+def note_matches_advanced_filters(note: Note, filters: Dict[str, Any]) -> bool:
+    checks = []
+    label = (filters.get("label") or "").strip()
+    if label:
+        checks.append(any(label.lower() == existing.lower() for existing in note.labels))
+
+    color = normalize_keep_color(filters.get("color", ""))
+    if color:
+        checks.append(normalize_keep_color(note.color) == color)
+
+    date_from = parse_filter_date(filters.get("date_from", ""))
+    if date_from:
+        checks.append(note.updated_at.astimezone(timezone.utc) >= date_from)
+
+    date_to = parse_filter_date(filters.get("date_to", ""))
+    if date_to:
+        end_of_day = date_to.replace(hour=23, minute=59, second=59)
+        checks.append(note.updated_at.astimezone(timezone.utc) <= end_of_day)
+
+    if filters.get("has_image"):
+        checks.append(any(attachment.is_image for attachment in note.attachments))
+
+    if filters.get("has_checklist"):
+        checks.append(note.note_type == NoteType.CHECKLIST or bool(note.checklist_items))
+
+    if filters.get("is_archived"):
+        checks.append(note.archived)
+
+    if not checks:
+        return True
+    if str(filters.get("mode", "AND")).upper() == "OR":
+        return any(checks)
+    return all(checks)
 
 @dataclass
 class Label:
@@ -4330,6 +4389,139 @@ class NoteEditor(ctk.CTkFrame):
         self.on_close_callback()
 
 
+class AdvancedFilterDialog(ctk.CTkToplevel):
+    """Advanced note filter editor."""
+
+    def __init__(self, parent, filters: Dict[str, Any], on_apply: Callable[[Dict[str, Any]], None]):
+        super().__init__(parent)
+        self.filters = dict(default_advanced_filters())
+        self.filters.update(filters or {})
+        self.on_apply = on_apply
+
+        self.title("Advanced Filters")
+        self.geometry("420x520")
+        self.configure(fg_color=COLORS["bg_dark"])
+        self.transient(parent)
+        self.grab_set()
+        self._build_ui()
+
+    def _build_ui(self):
+        frame = ctk.CTkFrame(self, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(
+            frame,
+            text="Advanced Filters",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", pady=(0, 16))
+
+        self.mode_var = ctk.StringVar(value=self.filters.get("mode", "AND"))
+        self.mode_menu = ctk.CTkOptionMenu(
+            frame,
+            values=["AND", "OR"],
+            variable=self.mode_var,
+            fg_color=COLORS["bg_medium"],
+            button_color=COLORS["bg_hover"],
+            button_hover_color=COLORS["accent_blue"],
+            text_color=COLORS["text_primary"]
+        )
+        self.mode_menu.pack(fill="x", pady=(0, 10))
+
+        self.label_entry = self._entry(frame, "Label", self.filters.get("label", ""))
+        color_values = [""] + [name for name in KEEP_COLOR_PALETTE.keys() if name]
+        self.color_var = ctk.StringVar(value=normalize_keep_color(self.filters.get("color", "")))
+        self.color_menu = ctk.CTkOptionMenu(
+            frame,
+            values=color_values,
+            variable=self.color_var,
+            fg_color=COLORS["bg_medium"],
+            button_color=COLORS["bg_hover"],
+            button_hover_color=COLORS["accent_blue"],
+            text_color=COLORS["text_primary"]
+        )
+        self.color_menu.pack(fill="x", pady=(0, 10))
+
+        self.date_from_entry = self._entry(frame, "From date YYYY-MM-DD", self.filters.get("date_from", ""))
+        self.date_to_entry = self._entry(frame, "To date YYYY-MM-DD", self.filters.get("date_to", ""))
+
+        self.has_image_var = ctk.BooleanVar(value=bool(self.filters.get("has_image")))
+        self.has_checklist_var = ctk.BooleanVar(value=bool(self.filters.get("has_checklist")))
+        self.is_archived_var = ctk.BooleanVar(value=bool(self.filters.get("is_archived")))
+        for label, variable in (
+            ("Has image", self.has_image_var),
+            ("Has checklist", self.has_checklist_var),
+            ("Is archived", self.is_archived_var),
+        ):
+            ctk.CTkCheckBox(
+                frame,
+                text=label,
+                variable=variable,
+                font=ctk.CTkFont(size=13),
+                text_color=COLORS["text_secondary"],
+                fg_color=COLORS["accent_green"],
+                hover_color=COLORS["accent_green_hover"]
+            ).pack(anchor="w", pady=(0, 8))
+
+        actions = ctk.CTkFrame(frame, fg_color="transparent")
+        actions.pack(fill="x", side="bottom", pady=(18, 0))
+
+        ctk.CTkButton(
+            actions,
+            text="Clear",
+            height=38,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self._clear
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        ctk.CTkButton(
+            actions,
+            text="Apply",
+            height=38,
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_hover"],
+            text_color=COLORS["bg_darkest"],
+            command=self._apply
+        ).pack(side="left", fill="x", expand=True)
+
+    def _entry(self, parent, placeholder: str, value: str):
+        entry = ctk.CTkEntry(
+            parent,
+            placeholder_text=placeholder,
+            font=ctk.CTkFont(size=13),
+            height=36,
+            fg_color=COLORS["bg_medium"],
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"]
+        )
+        entry.pack(fill="x", pady=(0, 10))
+        if value:
+            entry.insert(0, value)
+        return entry
+
+    def _current_filters(self) -> Dict[str, Any]:
+        return {
+            "mode": self.mode_var.get(),
+            "label": self.label_entry.get().strip(),
+            "color": self.color_var.get(),
+            "date_from": self.date_from_entry.get().strip(),
+            "date_to": self.date_to_entry.get().strip(),
+            "has_image": self.has_image_var.get(),
+            "has_checklist": self.has_checklist_var.get(),
+            "is_archived": self.is_archived_var.get(),
+        }
+
+    def _clear(self):
+        self.on_apply(default_advanced_filters())
+        self.destroy()
+
+    def _apply(self):
+        self.on_apply(self._current_filters())
+        self.destroy()
+
+
 class ImportConflictDialog(ctk.CTkToplevel):
     """Modal import conflict resolver."""
 
@@ -5864,6 +6056,7 @@ class KeepSyncNotesApp(ctk.CTk):
         # State
         self.current_filter = "all"  # all, archived, trash, label:<name>
         self.search_query = ""
+        self.advanced_filters = default_advanced_filters()
         self.selected_note: Optional[Note] = None
         self._reminder_after_id = None
         self._takeout_watch_after_id = None
@@ -6076,6 +6269,31 @@ class KeepSyncNotesApp(ctk.CTk):
         )
         self.search_entry.pack(fill="x")
         self.search_entry.bind("<KeyRelease>", self._on_search)
+
+        filter_row = ctk.CTkFrame(list_panel, fg_color="transparent")
+        filter_row.pack(fill="x", padx=16, pady=(0, 8))
+
+        self.filter_summary_label = ctk.CTkLabel(
+            filter_row,
+            text="No filters",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_muted"],
+            anchor="w"
+        )
+        self.filter_summary_label.pack(side="left", fill="x", expand=True)
+
+        filter_btn = ctk.CTkButton(
+            filter_row,
+            text="Filters",
+            font=ctk.CTkFont(size=12),
+            width=74,
+            height=30,
+            fg_color=COLORS["bg_medium"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self._open_advanced_filters
+        )
+        filter_btn.pack(side="right")
         
         # Notes count
         self.notes_count_label = ctk.CTkLabel(
@@ -6166,10 +6384,25 @@ class KeepSyncNotesApp(ctk.CTk):
         for card in self.note_cards:
             card.destroy()
         self.note_cards.clear()
+
+        advanced_active = advanced_filters_active(self.advanced_filters)
         
         # Get notes based on filter
-        if self.current_filter == "all":
-            notes = self.db.get_all_notes()
+        if self.current_filter == "all" and self.search_query:
+            notes = self.db.search_notes(self.search_query)
+            if self.advanced_filters.get("is_archived"):
+                archived_matches = [
+                    note for note in self.db.get_all_notes(include_archived=True)
+                    if note.archived and (
+                        self.search_query.lower() in note.title.lower()
+                        or self.search_query.lower() in note.content.lower()
+                    )
+                ]
+                seen = {note.id for note in notes}
+                notes.extend([note for note in archived_matches if note.id not in seen])
+        elif self.current_filter == "all":
+            include_archived = bool(self.advanced_filters.get("is_archived"))
+            notes = self.db.get_all_notes(include_archived=include_archived)
         elif self.current_filter == "archived":
             notes = self.db.get_all_notes(include_archived=True)
             notes = [n for n in notes if n.archived]
@@ -6183,11 +6416,15 @@ class KeepSyncNotesApp(ctk.CTk):
             notes = self.db.get_all_notes()
         
         # Apply search filter
-        if self.search_query:
+        if self.search_query and not (self.current_filter == "all"):
             query_lower = self.search_query.lower()
             notes = [n for n in notes if 
                      query_lower in n.title.lower() or 
                      query_lower in n.content.lower()]
+
+        if advanced_active:
+            notes = [note for note in notes if note_matches_advanced_filters(note, self.advanced_filters)]
+        self._update_filter_summary()
         
         # Update count
         self.notes_count_label.configure(text=f"{len(notes)} note{'s' if len(notes) != 1 else ''}")
@@ -6230,6 +6467,32 @@ class KeepSyncNotesApp(ctk.CTk):
         """Handle search input"""
         self.search_query = self.search_entry.get()
         self._refresh_notes_list()
+
+    def _open_advanced_filters(self):
+        AdvancedFilterDialog(self, self.advanced_filters, self._apply_advanced_filters)
+
+    def _apply_advanced_filters(self, filters: Dict[str, Any]):
+        self.advanced_filters = dict(default_advanced_filters())
+        self.advanced_filters.update(filters or {})
+        self._refresh_notes_list()
+
+    def _update_filter_summary(self):
+        if not hasattr(self, "filter_summary_label"):
+            return
+        if not advanced_filters_active(self.advanced_filters):
+            self.filter_summary_label.configure(text="No filters", text_color=COLORS["text_muted"])
+            return
+        parts = [self.advanced_filters.get("mode", "AND")]
+        if self.advanced_filters.get("label"):
+            parts.append(f"label:{self.advanced_filters['label']}")
+        if self.advanced_filters.get("color"):
+            parts.append(f"color:{self.advanced_filters['color']}")
+        if self.advanced_filters.get("date_from") or self.advanced_filters.get("date_to"):
+            parts.append(f"{self.advanced_filters.get('date_from') or '*'}..{self.advanced_filters.get('date_to') or '*'}")
+        for key, label in (("has_image", "image"), ("has_checklist", "checklist"), ("is_archived", "archived")):
+            if self.advanced_filters.get(key):
+                parts.append(label)
+        self.filter_summary_label.configure(text=" | ".join(parts[:4]), text_color=COLORS["accent_blue"])
     
     def _new_note(self):
         """Create a new note"""

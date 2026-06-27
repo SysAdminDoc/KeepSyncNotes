@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.11.0] - 2026-06-27
+
+- Added an advanced filters dialog with AND/OR matching.
+- Added label, color, date range, image, checklist, and archived-note predicates.
+- Routed all-notes text search through FTS while preserving filter support.
+
 ## [v1.10.0] - 2026-06-27
 
 - Added SQLite FTS5 indexing for note titles, body text, checklist item text, and labels.
