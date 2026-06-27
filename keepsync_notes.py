@@ -179,7 +179,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -301,6 +301,43 @@ def format_reminder_datetime(value: Optional[datetime]) -> str:
         return ""
     return value.astimezone().strftime("%Y-%m-%d %H:%M")
 
+def normalize_people(values: Any) -> List[str]:
+    """Normalize shared-with metadata from Takeout/export structures."""
+    people = []
+    if not values:
+        return people
+    if isinstance(values, str):
+        values = [values]
+    if isinstance(values, dict):
+        values = [values]
+
+    for item in values:
+        person = ""
+        if isinstance(item, str):
+            person = item
+        elif isinstance(item, dict):
+            for key in ("email", "emailAddress", "displayName", "name", "userName"):
+                if item.get(key):
+                    person = str(item[key])
+                    break
+            if not person and isinstance(item.get("user"), dict):
+                nested_people = normalize_people(item["user"])
+                person = nested_people[0] if nested_people else ""
+        person = person.strip()
+        if person and person not in people:
+            people.append(person)
+    return people
+
+def extract_shared_with(data: dict) -> List[str]:
+    shared = []
+    for key in ("sharees", "collaborators", "contributors", "sharedWith", "sharingUserInfo"):
+        for person in normalize_people(data.get(key)):
+            if person not in shared:
+                shared.append(person)
+    if not shared and data.get("isShared"):
+        shared.append("Shared")
+    return shared
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA MODELS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -352,6 +389,7 @@ class Note:
     reminder_at: Optional[datetime] = None
     reminder_location: str = ""
     reminder_notified: bool = False
+    shared_with: List[str] = field(default_factory=list)
     
     # Sync metadata
     keep_id: Optional[str] = None
@@ -366,6 +404,7 @@ class Note:
     
     def __post_init__(self):
         self.color = normalize_keep_color(self.color)
+        self.shared_with = normalize_people(self.shared_with)
         for item in self.checklist_items:
             item.indent = clamp_checklist_indent(item.indent)
         self.update_hash()
@@ -375,7 +414,8 @@ class Note:
         content = (
             f"{self.title}|{self.content}|{json.dumps([i.to_dict() for i in self.checklist_items])}|"
             f"{json.dumps(self.labels)}|{self.pinned}|{self.archived}|{self.trashed}|{self.color}|"
-            f"{self.reminder_at.isoformat() if self.reminder_at else ''}|{self.reminder_location}"
+            f"{self.reminder_at.isoformat() if self.reminder_at else ''}|{self.reminder_location}|"
+            f"{json.dumps(self.shared_with)}"
         )
         self.content_hash = hashlib.md5(content.encode()).hexdigest()
     
@@ -394,6 +434,7 @@ class Note:
             "reminder_at": self.reminder_at.isoformat() if self.reminder_at else None,
             "reminder_location": self.reminder_location,
             "reminder_notified": self.reminder_notified,
+            "shared_with": self.shared_with,
             "keep_id": self.keep_id,
             "sync_status": self.sync_status.value,
             "local_modified": self.local_modified.isoformat() if self.local_modified else None,
@@ -419,6 +460,7 @@ class Note:
             reminder_at=datetime.fromisoformat(data["reminder_at"]) if data.get("reminder_at") else None,
             reminder_location=data.get("reminder_location", ""),
             reminder_notified=data.get("reminder_notified", False),
+            shared_with=normalize_people(data.get("shared_with", [])),
             keep_id=data.get("keep_id"),
             sync_status=SyncStatus(data.get("sync_status", "local_only")),
             local_modified=datetime.fromisoformat(data["local_modified"]) if data.get("local_modified") else None,
@@ -483,6 +525,7 @@ class DatabaseManager:
                 reminder_at TEXT,
                 reminder_location TEXT DEFAULT '',
                 reminder_notified INTEGER DEFAULT 0,
+                shared_with TEXT DEFAULT '[]',
                 keep_id TEXT,
                 sync_status TEXT DEFAULT 'local_only',
                 local_modified TEXT,
@@ -496,6 +539,7 @@ class DatabaseManager:
         self._ensure_column("notes", "reminder_at", "TEXT")
         self._ensure_column("notes", "reminder_location", "TEXT DEFAULT ''")
         self._ensure_column("notes", "reminder_notified", "INTEGER DEFAULT 0")
+        self._ensure_column("notes", "shared_with", "TEXT DEFAULT '[]'")
         
         # Labels table
         cursor.execute("""
@@ -555,9 +599,9 @@ class DatabaseManager:
                 INSERT OR REPLACE INTO notes 
                 (id, title, content, note_type, checklist_items, labels, pinned, archived, 
                  trashed, color, reminder_at, reminder_location, reminder_notified,
-                 keep_id, sync_status, local_modified, remote_modified,
+                 shared_with, keep_id, sync_status, local_modified, remote_modified,
                  content_hash, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 note.id, note.title, note.content, note.note_type.value,
                 json.dumps([i.to_dict() for i in note.checklist_items]),
@@ -565,6 +609,7 @@ class DatabaseManager:
                 int(note.trashed), note.color,
                 note.reminder_at.isoformat() if note.reminder_at else None,
                 note.reminder_location, int(note.reminder_notified),
+                json.dumps(note.shared_with),
                 note.keep_id, note.sync_status.value,
                 note.local_modified.isoformat() if note.local_modified else None,
                 note.remote_modified.isoformat() if note.remote_modified else None,
@@ -694,6 +739,7 @@ class DatabaseManager:
             reminder_at=datetime.fromisoformat(row["reminder_at"]) if row["reminder_at"] else None,
             reminder_location=row["reminder_location"] or "",
             reminder_notified=bool(row["reminder_notified"]),
+            shared_with=normalize_people(json.loads(row["shared_with"] or "[]")),
             keep_id=row["keep_id"],
             sync_status=SyncStatus(row["sync_status"]) if row["sync_status"] else SyncStatus.LOCAL_ONLY,
             local_modified=datetime.fromisoformat(row["local_modified"]) if row["local_modified"] else None,
@@ -1013,6 +1059,7 @@ class KeepSyncEngine:
         
         # Get labels
         labels = [label.name for label in keep_note.labels.all()]
+        shared_with = self._extract_keep_shared_with(keep_note)
         
         return Note(
             id=note_id,
@@ -1021,6 +1068,7 @@ class KeepSyncEngine:
             note_type=note_type,
             checklist_items=checklist_items,
             labels=labels,
+            shared_with=shared_with,
             pinned=keep_note.pinned,
             archived=keep_note.archived,
             trashed=keep_note.trashed,
@@ -1030,6 +1078,23 @@ class KeepSyncEngine:
             created_at=existing.created_at if existing else (keep_note.timestamps.created or datetime.now(timezone.utc)),
             updated_at=datetime.now(timezone.utc),
         )
+
+    def _extract_keep_shared_with(self, keep_note) -> List[str]:
+        """Best-effort collaborator metadata extraction from gkeepapi notes."""
+        shared = []
+        for attr in ("collaborators", "sharees", "shared_with"):
+            value = getattr(keep_note, attr, None)
+            if value is None:
+                continue
+            try:
+                if hasattr(value, "all"):
+                    value = value.all()
+                for person in normalize_people(value):
+                    if person not in shared:
+                        shared.append(person)
+            except Exception:
+                continue
+        return shared
     
     def _create_keep_note(self, local_note: Note):
         """Create a new note in Google Keep"""
@@ -2386,6 +2451,20 @@ class NoteCard(ctk.CTkFrame):
                 wraplength=250
             )
             self.reminder_label.pack(fill="x", pady=(0, 8))
+
+        if self.note.shared_with:
+            shared_text = "Shared with " + ", ".join(self.note.shared_with[:2])
+            if len(self.note.shared_with) > 2:
+                shared_text += f" +{len(self.note.shared_with) - 2}"
+            self.shared_label = ctk.CTkLabel(
+                self.content_frame,
+                text=shared_text,
+                font=ctk.CTkFont(size=11),
+                text_color=COLORS["accent_cyan"],
+                anchor="w",
+                wraplength=250
+            )
+            self.shared_label.pack(fill="x", pady=(0, 8))
         
         # Footer with labels and sync status
         footer = ctk.CTkFrame(self.content_frame, fg_color="transparent")
@@ -2763,6 +2842,27 @@ class NoteEditor(ctk.CTkFrame):
             command=self._clear_reminder
         )
         self.clear_reminder_btn.pack(side="left", padx=(8, 0))
+
+        shared_section = ctk.CTkFrame(editor_frame, fg_color="transparent")
+        shared_section.pack(fill="x", pady=(12, 0))
+
+        ctk.CTkLabel(
+            shared_section,
+            text="Shared With",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=COLORS["text_secondary"]
+        ).pack(anchor="w")
+
+        self.shared_display = ctk.CTkLabel(
+            shared_section,
+            text="Not shared",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_muted"],
+            anchor="w",
+            justify="left",
+            wraplength=520
+        )
+        self.shared_display.pack(fill="x", pady=(4, 0))
         
         # Advanced options (collapsible)
         self.advanced_frame = ctk.CTkFrame(editor_frame, fg_color="transparent")
@@ -2811,6 +2911,7 @@ class NoteEditor(ctk.CTkFrame):
             self.reminder_entry.insert(0, format_reminder_datetime(note.reminder_at))
             self.reminder_location_entry.delete(0, "end")
             self.reminder_location_entry.insert(0, note.reminder_location)
+            self._load_shared_with(note.shared_with)
             
             self._load_labels(note.labels)
             self.sync_badge.update_status(note.sync_status)
@@ -2842,6 +2943,7 @@ class NoteEditor(ctk.CTkFrame):
             self._clear_checklist_items()
             self._load_labels([])
             self._clear_reminder(mark_modified=False)
+            self._load_shared_with([])
             self.sync_badge.update_status(SyncStatus.LOCAL_ONLY)
             self.unlink_btn.pack_forget()
             self.pin_btn.configure(image=IconManager.get_icon("pin", 18, COLORS["text_secondary"]))
@@ -2875,6 +2977,19 @@ class NoteEditor(ctk.CTkFrame):
         self.reminder_location_entry.delete(0, "end")
         if mark_modified:
             self._on_modify()
+
+    def _load_shared_with(self, shared_with: List[str]):
+        """Display imported sharing metadata."""
+        if shared_with:
+            self.shared_display.configure(
+                text=", ".join(shared_with),
+                text_color=COLORS["accent_cyan"]
+            )
+        else:
+            self.shared_display.configure(
+                text="Not shared",
+                text_color=COLORS["text_muted"]
+            )
     
     def _on_type_change(self):
         """Switch between text and checklist editor"""
@@ -4350,6 +4465,7 @@ for you to authorize the app."""
                 archived=data.get("isArchived", False),
                 trashed=data.get("isTrashed", False),
                 color=normalize_keep_color(data.get("color", "")),
+                shared_with=extract_shared_with(data),
                 sync_status=SyncStatus.LOCAL_ONLY,
             )
         except Exception:
