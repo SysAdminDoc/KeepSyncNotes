@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.6.0] - 2026-06-27
+
+- Added stdlib-only import adapters for ENEX, Standard Notes ZIP, Obsidian vaults, Bear ZIP/textbundle exports, Simplenote JSON/ZIP exports, and OneNote HTML/TXT folders.
+- Added a Data tab source selector and import action for non-Keep imports.
+- Ensured imported labels are saved to the local label table so they appear in the sidebar.
+
 ## [v1.5.0] - 2026-06-27
 
 - Added `.md` label detection for text notes.

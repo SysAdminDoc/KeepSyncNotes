@@ -154,6 +154,10 @@ import sys
 import re
 import mimetypes
 import shutil
+import zipfile
+import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
+from html import unescape
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
@@ -181,7 +185,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -543,6 +547,107 @@ def import_takeout_attachments(data: dict, base_path: Optional[Path], attachment
             mime_type=guess_attachment_mime(stored_path or filename, mime_type),
         ))
     return attachments
+
+class HTMLTextExtractor(HTMLParser):
+    """Small HTML-to-text extractor for imported note formats."""
+
+    BLOCK_TAGS = {
+        "address", "article", "aside", "blockquote", "br", "div", "dl", "dt", "dd",
+        "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
+        "header", "hr", "li", "main", "ol", "p", "pre", "section", "table", "tr",
+        "ul",
+    }
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: List[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag == "en-todo":
+            checked = any(name == "checked" and value == "true" for name, value in attrs)
+            self.parts.append("[x] " if checked else "[ ] ")
+        elif tag in self.BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag.lower() in self.BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+    def text(self) -> str:
+        value = unescape("".join(self.parts))
+        value = re.sub(r"[ \t\r\f\v]+", " ", value)
+        value = re.sub(r" *\n *", "\n", value)
+        value = re.sub(r"\n{3,}", "\n\n", value)
+        return value.strip()
+
+def html_to_text(value: str) -> str:
+    extractor = HTMLTextExtractor()
+    try:
+        extractor.feed(value or "")
+        return extractor.text()
+    except Exception:
+        return re.sub(r"<[^>]+>", "", value or "").strip()
+
+def strip_enex_content(value: str) -> str:
+    content = value or ""
+    content = re.sub(r"<!DOCTYPE[^>]*>", "", content, flags=re.IGNORECASE)
+    content = re.sub(r"<\?xml[^>]*\?>", "", content, flags=re.IGNORECASE)
+    return html_to_text(content)
+
+def normalize_import_labels(labels: List[str], source: str = "", markdown: bool = False) -> List[str]:
+    normalized = []
+    if source:
+        normalized.append(source)
+    if markdown:
+        normalized.append(".md")
+    for label in labels or []:
+        label_text = str(label or "").strip()
+        if label_text and label_text not in normalized:
+            normalized.append(label_text)
+    return normalized
+
+def title_from_content(content: str, fallback: str) -> str:
+    for line in (content or "").splitlines():
+        cleaned = line.strip().strip("#").strip()
+        if cleaned:
+            return cleaned[:120]
+    return fallback[:120] or "Untitled"
+
+def labels_from_hashtags(content: str) -> List[str]:
+    return sorted({match.group(1) for match in re.finditer(r"(?<!\w)#([A-Za-z0-9_-]+)", content or "")})
+
+def parse_external_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    text = str(value).strip()
+    candidates = [text, text.replace("Z", "+00:00")]
+    if re.fullmatch(r"\d{8}T\d{6}Z?", text):
+        candidates.append(f"{text[0:4]}-{text[4:6]}-{text[6:8]}T{text[9:11]}:{text[11:13]}:{text[13:15]}+00:00")
+    for candidate in candidates:
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+def decode_zip_member(zf: zipfile.ZipFile, member: zipfile.ZipInfo) -> str:
+    raw = zf.read(member)
+    for encoding in ("utf-8-sig", "utf-8", "utf-16", "cp1252"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+def is_hidden_or_system_path(path_text: str) -> bool:
+    return any(part.startswith(".") or part == "__MACOSX" for part in Path(path_text).parts)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA MODELS
@@ -1015,6 +1120,25 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error saving label: {e}")
             return False
+
+    def ensure_label(self, name: str) -> bool:
+        label_name = str(name or "").strip()
+        if not label_name:
+            return False
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id FROM labels WHERE name = ?", (label_name,))
+            if cursor.fetchone():
+                return True
+            cursor.execute(
+                "INSERT INTO labels (id, name, color, keep_id) VALUES (?, ?, ?, ?)",
+                (str(uuid.uuid4()), label_name, "", None)
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error ensuring label: {e}")
+            return False
     
     def get_all_labels(self) -> List[Label]:
         cursor = self.conn.cursor()
@@ -1072,6 +1196,155 @@ class DatabaseManager:
     def close(self):
         if self.conn:
             self.conn.close()
+
+class MultiSourceImporter:
+    """Import notes from common note-app export formats."""
+
+    TEXT_SUFFIXES = {".txt", ".md", ".markdown"}
+    HTML_SUFFIXES = {".html", ".htm", ".mht", ".mhtml"}
+
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    def save_notes(self, notes: List[Note]) -> int:
+        imported = 0
+        for note in notes:
+            note.keep_id = None
+            note.sync_status = SyncStatus.LOCAL_ONLY
+            if self.db.save_note(note):
+                imported += 1
+                for label in note.labels:
+                    self.db.ensure_label(label)
+        return imported
+
+    def _note_from_text(
+        self,
+        title: str,
+        content: str,
+        source: str,
+        labels: Optional[List[str]] = None,
+        markdown: bool = False,
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+    ) -> Note:
+        label_values = normalize_import_labels(labels or [], source, markdown)
+        now = datetime.now(timezone.utc)
+        created = created_at or now
+        updated = updated_at or created
+        return Note(
+            id=str(uuid.uuid4()),
+            title=(title or "").strip() or title_from_content(content, "Untitled"),
+            content=(content or "").strip(),
+            labels=label_values,
+            sync_status=SyncStatus.LOCAL_ONLY,
+            created_at=created,
+            updated_at=updated,
+            local_modified=updated,
+        )
+
+    def import_enex(self, path: Path, source: str = "Evernote") -> List[Note]:
+        tree = ET.parse(path)
+        root = tree.getroot()
+        notes = []
+        for raw_note in root.findall(".//note"):
+            title = (raw_note.findtext("title") or path.stem).strip()
+            content = strip_enex_content(raw_note.findtext("content") or "")
+            labels = [tag.text.strip() for tag in raw_note.findall("tag") if tag.text and tag.text.strip()]
+            created = parse_external_datetime(raw_note.findtext("created"))
+            updated = parse_external_datetime(raw_note.findtext("updated"))
+            notes.append(self._note_from_text(title, content, source, labels, False, created, updated))
+        return notes
+
+    def import_text_folder(self, folder: Path, source: str, markdown_default: bool = False) -> List[Note]:
+        notes = []
+        for file_path in folder.rglob("*"):
+            if not file_path.is_file() or is_hidden_or_system_path(str(file_path.relative_to(folder))):
+                continue
+            suffix = file_path.suffix.lower()
+            if suffix not in self.TEXT_SUFFIXES and suffix not in self.HTML_SUFFIXES:
+                continue
+            raw = file_path.read_text(encoding="utf-8-sig", errors="replace")
+            content = html_to_text(raw) if suffix in self.HTML_SUFFIXES else raw
+            relative_parent = file_path.relative_to(folder).parent
+            folder_labels = [part for part in relative_parent.parts if part and part != "."]
+            markdown = markdown_default or suffix in {".md", ".markdown"}
+            notes.append(self._note_from_text(file_path.stem, content, source, folder_labels, markdown))
+        return notes
+
+    def import_text_zip(self, path: Path, source: str, markdown_default: bool = False) -> List[Note]:
+        notes = []
+        with zipfile.ZipFile(path) as zf:
+            members = [member for member in zf.infolist() if not member.is_dir() and not is_hidden_or_system_path(member.filename)]
+            for member in members:
+                suffix = Path(member.filename).suffix.lower()
+                if suffix not in self.TEXT_SUFFIXES and suffix not in self.HTML_SUFFIXES:
+                    continue
+                content = decode_zip_member(zf, member)
+                if suffix in self.HTML_SUFFIXES:
+                    content = html_to_text(content)
+                labels = [part for part in Path(member.filename).parent.parts if part and part != "."]
+                labels.extend(labels_from_hashtags(content))
+                markdown = markdown_default or suffix in {".md", ".markdown"} or "textbundle" in Path(member.filename).parts
+                notes.append(self._note_from_text(Path(member.filename).stem, content, source, labels, markdown))
+        return notes
+
+    def import_simplenote_json(self, data: Any) -> List[Note]:
+        if isinstance(data, dict):
+            raw_notes = list(data.get("activeNotes") or data.get("notes") or data.get("items") or [])
+            raw_notes.extend(data.get("trashedNotes") or [])
+        elif isinstance(data, list):
+            raw_notes = data
+        else:
+            raw_notes = []
+
+        notes = []
+        for item in raw_notes:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content") or item.get("text") or item.get("body") or ""
+            title = item.get("title") or title_from_content(content, "Simplenote note")
+            labels = item.get("tags") or item.get("labels") or []
+            markdown = "markdown" in [str(tag).lower() for tag in item.get("systemTags", [])]
+            created = parse_external_datetime(item.get("creationDate") or item.get("created_at") or item.get("created"))
+            updated = parse_external_datetime(item.get("modificationDate") or item.get("updated_at") or item.get("updated"))
+            note = self._note_from_text(title, content, "Simplenote", labels, markdown, created, updated)
+            note.trashed = bool(item.get("deleted") or item.get("trashed"))
+            notes.append(note)
+        return notes
+
+    def import_simplenote_export(self, path: Path) -> List[Note]:
+        if path.suffix.lower() == ".json":
+            return self.import_simplenote_json(json.loads(path.read_text(encoding="utf-8-sig")))
+
+        notes = []
+        with zipfile.ZipFile(path) as zf:
+            members = [member for member in zf.infolist() if not member.is_dir() and not is_hidden_or_system_path(member.filename)]
+            json_members = [member for member in members if Path(member.filename).suffix.lower() == ".json"]
+            for member in json_members:
+                try:
+                    parsed = json.loads(decode_zip_member(zf, member))
+                    notes.extend(self.import_simplenote_json(parsed))
+                except json.JSONDecodeError:
+                    continue
+            if notes:
+                return notes
+
+        return self.import_text_zip(path, "Simplenote")
+
+    def import_external(self, source_type: str, path: Path) -> List[Note]:
+        if source_type == "Evernote / Apple Notes ENEX":
+            return self.import_enex(path, "Evernote")
+        if source_type == "Standard Notes ZIP":
+            return self.import_text_zip(path, "Standard Notes")
+        if source_type == "Obsidian Vault":
+            return self.import_text_folder(path, "Obsidian", markdown_default=True)
+        if source_type == "Bear ZIP":
+            return self.import_text_zip(path, "Bear", markdown_default=True)
+        if source_type == "Simplenote Export":
+            return self.import_simplenote_export(path)
+        if source_type == "OneNote HTML Folder":
+            return self.import_text_folder(path, "OneNote")
+        raise ValueError(f"Unsupported source type: {source_type}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # GOOGLE KEEP SYNC ENGINE
@@ -4645,6 +4918,44 @@ class SettingsDialog(ctk.CTkToplevel):
             command=self._import_notes
         )
         import_btn.pack(side="left", fill="x", expand=True)
+
+        source_frame = ctk.CTkFrame(data_frame, fg_color="transparent")
+        source_frame.pack(fill="x", padx=16, pady=(0, 16))
+
+        self.external_source_var = ctk.StringVar(value="Evernote / Apple Notes ENEX")
+        source_menu = ctk.CTkOptionMenu(
+            source_frame,
+            values=[
+                "Evernote / Apple Notes ENEX",
+                "Standard Notes ZIP",
+                "Obsidian Vault",
+                "Bear ZIP",
+                "Simplenote Export",
+                "OneNote HTML Folder",
+            ],
+            variable=self.external_source_var,
+            font=ctk.CTkFont(size=12),
+            fg_color=COLORS["bg_light"],
+            button_color=COLORS["bg_hover"],
+            button_hover_color=COLORS["accent_blue"],
+            dropdown_fg_color=COLORS["bg_medium"],
+            dropdown_hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            height=36
+        )
+        source_menu.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        external_btn = ctk.CTkButton(
+            source_frame,
+            text="Import Source",
+            font=ctk.CTkFont(size=13),
+            height=36,
+            fg_color=COLORS["accent_blue"],
+            hover_color=COLORS["accent_blue_hover"],
+            text_color=COLORS["bg_darkest"],
+            command=self._import_external_source
+        )
+        external_btn.pack(side="left")
         
         # Database info
         info_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
@@ -4850,6 +5161,15 @@ for you to authorize the app."""
     def _get_master_token(self):
         """Open master token generator"""
         TokenGeneratorDialog(self, "")
+
+    def _save_imported_note(self, note: Note) -> bool:
+        if not note:
+            return False
+        if self.db.save_note(note):
+            for label in note.labels:
+                self.db.ensure_label(label)
+            return True
+        return False
     
     def _export_notes(self):
         """Export notes to JSON"""
@@ -4868,6 +5188,39 @@ for you to authorize the app."""
             with open(filepath, "w") as f:
                 json.dump(data, f, indent=2)
             messagebox.showinfo("Export Complete", f"Exported {len(notes)} notes to {filepath}")
+
+    def _import_external_source(self):
+        """Import notes from another note app export."""
+        source_type = self.external_source_var.get()
+        folder_sources = {"Obsidian Vault", "OneNote HTML Folder"}
+
+        if source_type in folder_sources:
+            selected = filedialog.askdirectory(title=f"Select {source_type}")
+        else:
+            selected = filedialog.askopenfilename(
+                title=f"Select {source_type}",
+                filetypes=[
+                    ("Supported exports", "*.enex *.zip *.json"),
+                    ("ENEX files", "*.enex"),
+                    ("ZIP files", "*.zip"),
+                    ("JSON files", "*.json"),
+                    ("All files", "*.*"),
+                ],
+            )
+
+        if not selected:
+            return
+
+        try:
+            importer = MultiSourceImporter(self.db)
+            notes = importer.import_external(source_type, Path(selected))
+            imported = importer.save_notes(notes)
+            messagebox.showinfo(
+                "Import Complete",
+                f"Imported {imported} notes from {source_type}"
+            )
+        except Exception as e:
+            messagebox.showerror("Import Failed", str(e))
     
     def _import_notes(self):
         """Import notes from JSON"""
@@ -4889,7 +5242,7 @@ for you to authorize the app."""
                 if isinstance(data, dict) and "textContent" in data:
                     # Single Google Keep note from Takeout
                     note = self._parse_takeout_note(data, Path(filepath).parent)
-                    if note and self.db.save_note(note):
+                    if self._save_imported_note(note):
                         imported = 1
                 elif isinstance(data, list):
                     # Multiple notes or Takeout folder
@@ -4906,7 +5259,7 @@ for you to authorize the app."""
                                 note.id = str(uuid.uuid4())
                                 note.keep_id = None
                                 note.sync_status = SyncStatus.LOCAL_ONLY
-                                if self.db.save_note(note):
+                                if self._save_imported_note(note):
                                     imported += 1
                 elif isinstance(data, dict) and "notes" in data:
                     # Our export format
@@ -4915,7 +5268,7 @@ for you to authorize the app."""
                         note.id = str(uuid.uuid4())
                         note.keep_id = None
                         note.sync_status = SyncStatus.LOCAL_ONLY
-                        if self.db.save_note(note):
+                        if self._save_imported_note(note):
                             imported += 1
                 
                 messagebox.showinfo("Import Complete", f"Imported {imported} notes")
@@ -5084,7 +5437,7 @@ for you to authorize the app."""
                     data = json.load(f)
                 
                 note = self._parse_takeout_note(data, json_file.parent)
-                if note and self.db.save_note(note):
+                if self._save_imported_note(note):
                     imported += 1
                 else:
                     errors += 1
