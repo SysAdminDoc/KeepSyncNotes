@@ -4,6 +4,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import keepsync_import_safety as import_safety
 import keepsync_notes as app
 
 
@@ -114,8 +115,8 @@ class MultiSourceImporterTests(unittest.TestCase):
         self.assertEqual([note.title for note in notes], ["Plan"])
 
     def test_rejects_zip_uncompressed_size_limit(self):
-        original_limit = app.MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES
-        app.MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES = 8
+        original_limit = import_safety.MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES
+        import_safety.MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES = 8
         try:
             export_path = self.root / "large.zip"
             with zipfile.ZipFile(export_path, "w") as zf:
@@ -124,7 +125,7 @@ class MultiSourceImporterTests(unittest.TestCase):
             with self.assertRaises(app.ImportSafetyError):
                 self.importer.import_text_zip(export_path, "Obsidian", markdown_default=True)
         finally:
-            app.MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES = original_limit
+            import_safety.MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES = original_limit
 
     def test_cancelled_import_stops_before_zip_processing(self):
         export_path = self.root / "cancel.zip"

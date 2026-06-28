@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.21.0] - 2026-06-28
+
+- Extracted ZIP and folder import safety limits, traversal checks, guarded extraction, and cancellation exceptions into `keepsync_import_safety.py`.
+- Kept importers and backup restore wired through the shared safety module.
+- Updated import safety tests to patch the live module limit instead of the app re-export.
+
 ## [v1.20.0] - 2026-06-28
 
 - Extracted cloud sync hash, base-version, dry-run count, delete, and conflict-copy planning into `keepsync_cloud_plan.py`.
