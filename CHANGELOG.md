@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.20.0] - 2026-06-28
+
+- Extracted cloud sync hash, base-version, dry-run count, delete, and conflict-copy planning into `keepsync_cloud_plan.py`.
+- Kept Google Drive and GitHub provider behavior wired through compatibility imports in `keepsync_notes.py`.
+- Updated cloud sync regression tests to exercise the extracted planner module directly.
+
 ## [v1.19.0] - 2026-06-28
 
 - Extracted note models, attachment/checklist models, Keep color normalization, and shared metadata helpers into `keepsync_models.py`.
