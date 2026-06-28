@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.19.0] - 2026-06-28
+
+- Extracted note models, attachment/checklist models, Keep color normalization, and shared metadata helpers into `keepsync_models.py`.
+- Kept the existing `keepsync_notes.py` public model names as compatibility re-exports.
+- Added direct regression coverage for the extracted model module.
+
 ## [v1.18.0] - 2026-06-28
 
 - Added three-way cloud sync planning for Google Drive and GitHub using per-note base hashes.
