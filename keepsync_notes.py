@@ -40,6 +40,8 @@ import shutil
 import tempfile
 import zipfile
 import difflib
+import traceback
+import importlib.util
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from html import unescape
@@ -77,7 +79,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.16.0"
+APP_VERSION = "1.17.0"
 DB_VERSION = 1
 KEYRING_SERVICE = "KeepSyncNotes"
 KEEP_MASTER_TOKEN_CREDENTIAL = "google_keep_master_token"
@@ -740,6 +742,116 @@ def guarded_import_files(folder: Path, allowed_suffixes: set) -> List[Path]:
             raise ImportSafetyError("Import folder size exceeds the import limit")
         files.append(file_path)
     return files
+
+
+class DiagnosticsManager:
+    """File-backed diagnostics and crash logging."""
+
+    DEPENDENCIES = {
+        "customtkinter": "customtkinter",
+        "Pillow": "PIL",
+        "requests": "requests",
+        "gkeepapi": "gkeepapi",
+        "gpsoauth": "gpsoauth",
+        "browser-cookie3": "browser_cookie3",
+        "plyer": "plyer",
+        "keyring": "keyring",
+        "PyGithub": "github",
+        "google-api-python-client": "googleapiclient",
+        "google-auth": "google.auth",
+        "google-auth-oauthlib": "google_auth_oauthlib",
+    }
+
+    def __init__(self, data_dir: Path):
+        self.data_dir = Path(data_dir)
+        self.log_dir = self.data_dir / "logs"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_path = self.log_dir / "keepsync-diagnostics.log"
+        self.last_exception = ""
+        self._previous_sys_hook = None
+        self._previous_thread_hook = None
+
+    def install_hooks(self):
+        self._previous_sys_hook = sys.excepthook
+        sys.excepthook = self._handle_unhandled_exception
+        if hasattr(threading, "excepthook"):
+            self._previous_thread_hook = threading.excepthook
+            threading.excepthook = self._handle_thread_exception
+
+    def _write(self, level: str, message: str):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with open(self.log_path, "a", encoding="utf-8") as fh:
+            fh.write(f"[{timestamp}] {level.upper()} {message}\n")
+
+    def log_event(self, level: str, message: str):
+        self._write(level, message)
+
+    def log_exception(self, context: str, exc: BaseException):
+        detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
+        self.last_exception = f"{context}: {exc}"
+        self._write("error", f"{context}: {detail}")
+
+    def _handle_unhandled_exception(self, exc_type, exc, tb):
+        detail = "".join(traceback.format_exception(exc_type, exc, tb)).strip()
+        self.last_exception = f"unhandled: {exc}"
+        self._write("critical", f"Unhandled exception: {detail}")
+        if self._previous_sys_hook:
+            self._previous_sys_hook(exc_type, exc, tb)
+
+    def _handle_thread_exception(self, args):
+        detail = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)).strip()
+        self.last_exception = f"thread: {args.exc_value}"
+        self._write("critical", f"Thread exception: {detail}")
+        if self._previous_thread_hook:
+            self._previous_thread_hook(args)
+
+    def dependency_state(self) -> Dict[str, str]:
+        state = {}
+        for package, import_name in self.DEPENDENCIES.items():
+            state[package] = "available" if importlib.util.find_spec(import_name) else "missing"
+        return state
+
+    def recent_log(self, limit: int = 80) -> str:
+        if not self.log_path.exists():
+            return ""
+        lines = self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        return "\n".join(lines[-limit:])
+
+    def report(self, db_path: Path, attachments_path: Path) -> str:
+        dependencies = "\n".join(
+            f"- {package}: {state}"
+            for package, state in sorted(self.dependency_state().items())
+        )
+        return (
+            f"{APP_NAME} v{APP_VERSION}\n"
+            f"Database: {db_path}\n"
+            f"Attachments: {attachments_path}\n"
+            f"Diagnostics log: {self.log_path}\n"
+            f"Keyring available: {KEYRING_AVAILABLE}\n"
+            f"Google Keep API available: {GKEEPAPI_AVAILABLE}\n"
+            f"Desktop notifications available: {DESKTOP_NOTIFICATIONS_AVAILABLE}\n"
+            f"Last exception: {self.last_exception or 'None'}\n\n"
+            f"Dependencies:\n{dependencies}\n\n"
+            f"Recent log:\n{self.recent_log() or 'No log entries.'}"
+        )
+
+
+DIAGNOSTICS: Optional[DiagnosticsManager] = None
+
+
+def set_diagnostics_manager(manager: DiagnosticsManager):
+    global DIAGNOSTICS
+    DIAGNOSTICS = manager
+
+
+def log_diagnostic_event(level: str, message: str):
+    if DIAGNOSTICS:
+        DIAGNOSTICS.log_event(level, message)
+
+
+def log_diagnostic_exception(context: str, exc: BaseException):
+    if DIAGNOSTICS:
+        DIAGNOSTICS.log_exception(context, exc)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA MODELS
@@ -1963,6 +2075,7 @@ class KeepSyncEngine:
             return True, "Successfully connected to Google Keep"
         except Exception as e:
             self.is_authenticated = False
+            log_diagnostic_exception("Google Keep login", e)
             error_msg = str(e)
             if "BadAuthentication" in error_msg:
                 return False, (
@@ -1989,6 +2102,7 @@ class KeepSyncEngine:
                 return True
             except Exception as e:
                 print(f"Auto-login failed: {e}")
+                log_diagnostic_exception("Google Keep auto-login", e)
                 return False
         return False
     
@@ -2045,6 +2159,7 @@ class KeepSyncEngine:
             
         except Exception as e:
             stats["errors"] += 1
+            log_diagnostic_exception("Google Keep sync", e)
             self.db.log_sync("sync", "", "error", str(e))
             self._notify_callbacks("error", f"Sync error: {str(e)}")
             return False, f"Sync error: {str(e)}", stats
@@ -2777,6 +2892,7 @@ class GoogleDriveSync(CloudSyncProvider):
             return True, "Connected to Google Drive successfully"
             
         except Exception as e:
+            log_diagnostic_exception("Google Drive connection", e)
             return False, f"Google Drive connection failed: {str(e)}"
     
     def _ensure_folder(self):
@@ -2999,6 +3115,7 @@ class GitHubSync(CloudSyncProvider):
             return True, f"Connected to GitHub repository: {repo_name}"
             
         except Exception as e:
+            log_diagnostic_exception("GitHub connection", e)
             return False, f"GitHub connection failed: {str(e)}"
     
     def disconnect(self):
@@ -5240,6 +5357,63 @@ class ImportProgressDialog(ctk.CTkToplevel):
         self.progress_bar.set(min(max(current / total, 0), 1))
 
 
+class DiagnosticsDialog(ctk.CTkToplevel):
+    """Read-only diagnostics panel."""
+
+    def __init__(self, parent, diagnostics: DiagnosticsManager, db_path: Path, attachments_path: Path):
+        super().__init__(parent)
+        self.diagnostics = diagnostics
+        self.db_path = db_path
+        self.attachments_path = attachments_path
+        self.title("Diagnostics")
+        self.geometry("760x560")
+        self.configure(fg_color=COLORS["bg_dark"])
+        self.transient(parent)
+        self.grab_set()
+
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=16, pady=(16, 8))
+
+        ctk.CTkLabel(
+            header,
+            text="Diagnostics",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=COLORS["text_primary"],
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            header,
+            text="Open Log",
+            font=ctk.CTkFont(size=12),
+            width=100,
+            height=32,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self._open_log,
+        ).pack(side="right")
+
+        self.textbox = ctk.CTkTextbox(
+            self,
+            font=ctk.CTkFont(family="Consolas", size=12),
+            fg_color=COLORS["bg_darkest"],
+            text_color=COLORS["text_primary"],
+            border_color=COLORS["border"],
+            border_width=1,
+        )
+        self.textbox.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        self._refresh()
+
+    def _refresh(self):
+        self.textbox.delete("1.0", "end")
+        self.textbox.insert("1.0", self.diagnostics.report(self.db_path, self.attachments_path))
+        self.textbox.configure(state="disabled")
+
+    def _open_log(self):
+        if self.diagnostics.log_path.exists():
+            webbrowser.open(self.diagnostics.log_path.resolve().as_uri())
+
+
 class SettingsDialog(ctk.CTkToplevel):
     """Settings dialog for Google Keep connection and app settings"""
     
@@ -5818,6 +5992,17 @@ class SettingsDialog(ctk.CTkToplevel):
             text_color=COLORS["bg_darkest"],
             command=self._restore_local_backup
         ).pack(side="left", fill="x", expand=True)
+
+        ctk.CTkButton(
+            data_frame,
+            text="Open Diagnostics",
+            font=ctk.CTkFont(size=13),
+            height=36,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self._open_diagnostics
+        ).pack(fill="x", padx=16, pady=(0, 16))
         
         # Database info
         info_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
@@ -6023,6 +6208,14 @@ class SettingsDialog(ctk.CTkToplevel):
             self.destroy()
         except Exception as e:
             messagebox.showerror("Restore Failed", str(e))
+
+    def _open_diagnostics(self):
+        diagnostics = getattr(self.app, "diagnostics", None) or DIAGNOSTICS
+        if not diagnostics:
+            messagebox.showerror("Diagnostics Unavailable", "Diagnostics manager is not initialized.")
+            return
+        db_path = Path(self.db.db_path)
+        DiagnosticsDialog(self, diagnostics, db_path, db_path.parent / "attachments")
     
     def _show_gdrive_instructions(self):
         """Show Google Drive setup instructions"""
@@ -6165,6 +6358,7 @@ for you to authorize the app."""
             except ImportCancelled:
                 self.after(0, cancelled)
             except Exception as e:
+                log_diagnostic_exception(f"{source_name} import", e)
                 self.after(0, lambda message=str(e): failed(message))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -6251,6 +6445,7 @@ for you to authorize the app."""
                 
                 messagebox.showinfo("Import Complete", f"Imported {imported} notes")
             except Exception as e:
+                log_diagnostic_exception("JSON import", e)
                 messagebox.showerror("Import Failed", str(e))
     
     def _parse_takeout_note(self, data: dict, base_path: Optional[Path] = None) -> Optional[Note]:
@@ -6334,6 +6529,7 @@ for you to authorize the app."""
             try:
                 LocalBackupManager(self.db).create_backup("before browser import")
             except Exception as e:
+                log_diagnostic_exception("browser import backup", e)
                 self.after(0, lambda message=str(e): self._browser_import_failed(progress_dialog, f"Backup failed before browser import: {message}"))
                 return
 
@@ -6422,6 +6618,10 @@ class KeepSyncNotesApp(ctk.CTk):
         # Set up data directory
         self.data_dir = Path.home() / ".keepsync_notes"
         self.data_dir.mkdir(exist_ok=True)
+        self.diagnostics = DiagnosticsManager(self.data_dir)
+        set_diagnostics_manager(self.diagnostics)
+        self.diagnostics.install_hooks()
+        self.diagnostics.log_event("info", f"Started {APP_NAME} v{APP_VERSION}")
         
         # Initialize database and sync engine
         self.db = DatabaseManager(str(self.data_dir / "notes.db"))
@@ -7049,6 +7249,7 @@ class KeepSyncNotesApp(ctk.CTk):
                 text_color=COLORS["accent_green"]
             )
         else:
+            log_diagnostic_event("error", f"Keep sync failed: {message}")
             self.sync_status_label.configure(
                 text="Sync error",
                 text_color=COLORS["accent_red"]
@@ -7064,6 +7265,7 @@ class KeepSyncNotesApp(ctk.CTk):
                 self.sync_status_label.configure(text=message, text_color=COLORS["accent_green"])
                 self._refresh_notes_list()
             elif status == "error":
+                log_diagnostic_event("error", f"Keep sync status error: {message}")
                 self.sync_status_label.configure(text="Error", text_color=COLORS["accent_red"])
             elif status == "connected":
                 self.sync_status_label.configure(text="Connected", text_color=COLORS["accent_green"])
@@ -7197,6 +7399,7 @@ class KeepSyncNotesApp(ctk.CTk):
                 text_color=COLORS["accent_green"]
             )
         else:
+            log_diagnostic_event("error", f"Cloud sync failed: {message}")
             self.sync_status_label.configure(text="Sync error", text_color=COLORS["accent_red"])
         self._refresh_notes_list()
 

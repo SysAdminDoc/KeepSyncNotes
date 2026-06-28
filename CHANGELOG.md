@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.17.0] - 2026-06-28
+
+- Added a file-backed diagnostics manager with unhandled exception and thread crash hooks.
+- Added a Data-tab diagnostics panel showing dependency state, database/attachment paths, last exception, and recent log entries.
+- Logged handled import, sync, auth, Drive, and GitHub errors to the diagnostics log.
+
 ## [v1.16.0] - 2026-06-28
 
 - Added versioned local ZIP backups containing the SQLite database, manifest, and attachment files.
