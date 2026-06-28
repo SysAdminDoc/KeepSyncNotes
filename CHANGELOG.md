@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.22.0] - 2026-06-28
+
+- Extracted local database and attachment backup/restore logic into `keepsync_backups.py`.
+- Passed app name and version into backup creation so manifests stay synchronized after version bumps.
+- Added direct backup module coverage for manifest metadata and app compatibility re-export.
+
 ## [v1.21.0] - 2026-06-28
 
 - Extracted ZIP and folder import safety limits, traversal checks, guarded extraction, and cancellation exceptions into `keepsync_import_safety.py`.

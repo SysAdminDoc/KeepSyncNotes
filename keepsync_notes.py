@@ -89,6 +89,7 @@ from keepsync_import_safety import (
     safe_zip_member_parts,
     validate_zip_members,
 )
+from keepsync_backups import LocalBackupManager
 
 try:
     import keyring
@@ -116,7 +117,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.21.0"
+APP_VERSION = "1.22.0"
 DB_VERSION = 1
 KEYRING_SERVICE = "KeepSyncNotes"
 KEEP_MASTER_TOKEN_CREDENTIAL = "google_keep_master_token"
@@ -1322,104 +1323,6 @@ class DatabaseManager:
             self.conn = None
 
 
-class LocalBackupManager:
-    """Create and restore local versioned backups of the database and attachments."""
-
-    BACKUP_PREFIX = "keepsync-backup"
-
-    def __init__(self, db: DatabaseManager):
-        self.db = db
-        self.db_path = Path(db.db_path)
-        self.data_dir = self.db_path.parent
-        self.backups_dir = self.data_dir / "backups"
-        self.attachments_dir = self.data_dir / "attachments"
-
-    def _backup_name(self, reason: str) -> str:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        slug = re.sub(r"[^A-Za-z0-9_-]+", "-", reason.lower()).strip("-") or "manual"
-        return f"{self.BACKUP_PREFIX}-{timestamp}-{slug[:40]}.zip"
-
-    def create_backup(self, reason: str) -> Path:
-        self.backups_dir.mkdir(parents=True, exist_ok=True)
-        backup_path = self.backups_dir / self._backup_name(reason)
-        counter = 1
-        while backup_path.exists():
-            backup_path = backup_path.with_name(f"{backup_path.stem}-{counter}{backup_path.suffix}")
-            counter += 1
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_db = Path(temp_dir) / "notes.db"
-            if self.db.conn:
-                self.db.conn.commit()
-                target = sqlite3.connect(temp_db)
-                try:
-                    self.db.conn.backup(target)
-                finally:
-                    target.close()
-            elif self.db_path.exists():
-                shutil.copy2(self.db_path, temp_db)
-            else:
-                raise FileNotFoundError(f"Database not found: {self.db_path}")
-
-            manifest = {
-                "app": APP_NAME,
-                "app_version": APP_VERSION,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "reason": reason,
-                "database": "notes.db",
-                "attachments": "attachments",
-            }
-
-            with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                zf.write(temp_db, "notes.db")
-                zf.writestr("manifest.json", json.dumps(manifest, indent=2))
-                if self.attachments_dir.exists():
-                    for file_path in self.attachments_dir.rglob("*"):
-                        if file_path.is_file():
-                            archive_name = Path("attachments") / file_path.relative_to(self.attachments_dir)
-                            zf.write(file_path, str(archive_name).replace("\\", "/"))
-        return backup_path
-
-    def list_backups(self) -> List[Dict[str, Any]]:
-        backups = []
-        if not self.backups_dir.exists():
-            return backups
-        for backup_path in sorted(self.backups_dir.glob(f"{self.BACKUP_PREFIX}-*.zip"), reverse=True):
-            manifest = {}
-            try:
-                with zipfile.ZipFile(backup_path) as zf:
-                    if "manifest.json" in zf.namelist():
-                        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
-            except Exception:
-                manifest = {}
-            backups.append({
-                "path": backup_path,
-                "name": backup_path.name,
-                "created_at": manifest.get("created_at", ""),
-                "reason": manifest.get("reason", ""),
-            })
-        return backups
-
-    def restore_backup(self, backup_path: Path) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_root = Path(temp_dir)
-            with zipfile.ZipFile(backup_path) as zf:
-                members = validate_zip_members(zf)
-                if "notes.db" not in {member.filename for member in members}:
-                    raise ImportSafetyError("Backup does not contain notes.db")
-                for member in members:
-                    extract_zip_member_safely(zf, member, temp_root)
-
-            restored_db = temp_root / "notes.db"
-            if self.db.conn:
-                self.db.close()
-            shutil.copy2(restored_db, self.db_path)
-
-            restored_attachments = temp_root / "attachments"
-            if self.attachments_dir.exists():
-                shutil.rmtree(self.attachments_dir)
-            if restored_attachments.exists():
-                shutil.copytree(restored_attachments, self.attachments_dir)
-
 class MultiSourceImporter:
     """Import notes from common note-app export formats."""
 
@@ -1809,7 +1712,7 @@ class KeepSyncEngine:
             return False, "Sync already in progress", {}
 
         try:
-            LocalBackupManager(self.db).create_backup("before keep sync")
+            LocalBackupManager(self.db, APP_NAME, APP_VERSION).create_backup("before keep sync")
         except Exception as e:
             return False, f"Backup failed before Keep sync: {e}", {}
         
@@ -3054,7 +2957,7 @@ class CloudSyncManager:
         if not self.active_provider or not self.active_provider.is_connected:
             return False, "No cloud provider connected", {}
         try:
-            LocalBackupManager(self.db).create_backup(f"before {self.active_provider.get_provider_name()} sync")
+            LocalBackupManager(self.db, APP_NAME, APP_VERSION).create_backup(f"before {self.active_provider.get_provider_name()} sync")
         except Exception as e:
             return False, f"Backup failed before cloud sync: {e}", {}
         return self.active_provider.sync()
@@ -5921,13 +5824,13 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _create_local_backup(self):
         try:
-            backup_path = LocalBackupManager(self.db).create_backup("manual")
+            backup_path = LocalBackupManager(self.db, APP_NAME, APP_VERSION).create_backup("manual")
             messagebox.showinfo("Backup Created", f"Created local backup:\n{backup_path}")
         except Exception as e:
             messagebox.showerror("Backup Failed", str(e))
 
     def _restore_local_backup(self):
-        manager = LocalBackupManager(self.db)
+        manager = LocalBackupManager(self.db, APP_NAME, APP_VERSION)
         selected = filedialog.askopenfilename(
             title="Select KeepSync backup",
             initialdir=str(manager.backups_dir),
@@ -6089,7 +5992,7 @@ for you to authorize the app."""
 
         def worker():
             try:
-                LocalBackupManager(self.db).create_backup(f"before {source_name} import")
+                LocalBackupManager(self.db, APP_NAME, APP_VERSION).create_backup(f"before {source_name} import")
                 importer = MultiSourceImporter(
                     self.db,
                     progress_callback=progress,
@@ -6149,7 +6052,7 @@ for you to authorize the app."""
                 with open(filepath, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 
-                LocalBackupManager(self.db).create_backup("before json import")
+                LocalBackupManager(self.db, APP_NAME, APP_VERSION).create_backup("before json import")
                 imported = 0
                 
                 # Check if this is a Google Takeout export
@@ -6269,7 +6172,7 @@ for you to authorize the app."""
             self.after(0, lambda: status_label.configure(text="Fetching notes from Google Keep..."))
             
             try:
-                LocalBackupManager(self.db).create_backup("before browser import")
+                LocalBackupManager(self.db, APP_NAME, APP_VERSION).create_backup("before browser import")
             except Exception as e:
                 log_diagnostic_exception("browser import backup", e)
                 self.after(0, lambda message=str(e): self._browser_import_failed(progress_dialog, f"Backup failed before browser import: {message}"))
@@ -7039,7 +6942,7 @@ class KeepSyncNotesApp(ctk.CTk):
         self.sync_engine.stop_auto_sync()
         self.cloud_sync.stop_auto_sync()
 
-        manager = LocalBackupManager(self.db)
+        manager = LocalBackupManager(self.db, APP_NAME, APP_VERSION)
         safety_backup = manager.create_backup("pre-restore")
         manager.restore_backup(Path(backup_path))
 
@@ -7236,7 +7139,7 @@ class KeepSyncNotesApp(ctk.CTk):
             updated_processed = dict(processed)
 
             try:
-                LocalBackupManager(self.db).create_backup("before auto takeout import")
+                LocalBackupManager(self.db, APP_NAME, APP_VERSION).create_backup("before auto takeout import")
             except Exception as e:
                 self.db.log_sync("auto_import", "backup", "error", str(e))
                 errors += 1
