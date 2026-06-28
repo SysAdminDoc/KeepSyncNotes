@@ -1,6 +1,6 @@
 # KeepSyncNotes
 
-![Version](https://img.shields.io/badge/version-1.12.0-blue)
+![Version](https://img.shields.io/badge/version-1.12.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Language](https://img.shields.io/badge/language-Python-3776AB)
 ![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
@@ -31,7 +31,7 @@ Dependencies auto-install on first run. No manual `pip install` needed.
 - **Markdown Preview** — Notes tagged `.md` can switch between editable source and rendered preview
 - **Ranked Full-Text Search** — SQLite FTS5 search across titles, bodies, checklist items, and labels
 - **Advanced Filters** — Combine label, color, date range, image, checklist, and archive filters with AND/OR logic
-- **Saved Searches** — Pin query/filter combinations as reusable virtual folders in the sidebar
+- **Saved Searches** — Pin query/filter combinations as reusable virtual folders, including FTS label/checklist hits and archived-note filters
 - **Tag & Label System** — Filter notes by the labels synced from Google Keep
 - **Note Editor** — Create, edit, and delete notes locally after import
 - **Archive & Trash Views** — Mirrors the Google Keep archived and trashed note states

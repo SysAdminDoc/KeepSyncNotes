@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.12.1] - 2026-06-28
+
+- Fixed saved searches so FTS matches from labels and checklist items remain visible.
+- Fixed filter-only saved searches so archived-note filters include archived notes.
+- Added regression coverage for saved-search FTS and archived-filter behavior.
+
 ## [v1.12.0] - 2026-06-28
 
 - Added saved searches backed by local settings storage.

@@ -47,6 +47,21 @@ class SearchFtsTests(unittest.TestCase):
 
         self.assertEqual(self.db.search_notes("needle"), [])
 
+    def test_search_can_include_archived_notes(self):
+        self.db.save_note(app.Note(
+            id="archived",
+            title="Archived",
+            content="",
+            labels=["archive-marker"],
+            archived=True,
+        ))
+
+        self.assertEqual(self.db.search_notes("archive-marker"), [])
+        self.assertEqual(
+            [note.id for note in self.db.search_notes("archive-marker", include_archived=True)],
+            ["archived"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

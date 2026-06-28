@@ -187,7 +187,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.12.0"
+APP_VERSION = "1.12.1"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -1218,18 +1218,20 @@ class DatabaseManager:
         )
         return [self._row_to_note(row) for row in cursor.fetchall()]
     
-    def search_notes(self, query: str) -> List[Note]:
-        """Search notes by title or content"""
+    def search_notes(self, query: str, include_archived: bool = False) -> List[Note]:
+        """Search notes by indexed note text, checklist items, and labels."""
         cursor = self.conn.cursor()
         fts_query = self._fts_query(query)
+        archived_clause = "" if include_archived else "AND notes.archived = 0"
         if getattr(self, "fts_available", False) and fts_query:
             try:
                 cursor.execute(
-                    """SELECT notes.*
+                    f"""SELECT notes.*
                        FROM notes_fts
                        JOIN notes ON notes.id = notes_fts.note_id
                        WHERE notes_fts MATCH ?
                          AND notes.trashed = 0
+                         {archived_clause}
                        ORDER BY bm25(notes_fts), notes.pinned DESC, notes.updated_at DESC""",
                     (fts_query,)
                 )
@@ -1239,9 +1241,9 @@ class DatabaseManager:
 
         search_term = f"%{query}%"
         cursor.execute(
-            """SELECT * FROM notes WHERE (title LIKE ? OR content LIKE ? OR labels LIKE ?) 
-               AND trashed = 0 ORDER BY pinned DESC, updated_at DESC""",
-            (search_term, search_term, search_term)
+            f"""SELECT * FROM notes WHERE (title LIKE ? OR content LIKE ? OR labels LIKE ? OR checklist_items LIKE ?)
+               AND trashed = 0 {archived_clause} ORDER BY pinned DESC, updated_at DESC""",
+            (search_term, search_term, search_term, search_term)
         )
         return [self._row_to_note(row) for row in cursor.fetchall()]
     
@@ -6410,30 +6412,16 @@ class KeepSyncNotesApp(ctk.CTk):
                     text_color=COLORS["text_secondary"]
                 )
     
-    def _refresh_notes_list(self):
-        """Refresh the notes list based on current filter"""
-        # Clear existing cards
-        for card in self.note_cards:
-            card.destroy()
-        self.note_cards.clear()
-
+    def _get_filtered_notes_for_current_view(self) -> List[Note]:
+        """Return notes for the active sidebar/search/filter state."""
         advanced_active = advanced_filters_active(self.advanced_filters)
-        
-        # Get notes based on filter
+        include_archived = bool(self.advanced_filters.get("is_archived"))
+        used_indexed_search = False
+
         if self.current_filter == "all" and self.search_query:
-            notes = self.db.search_notes(self.search_query)
-            if self.advanced_filters.get("is_archived"):
-                archived_matches = [
-                    note for note in self.db.get_all_notes(include_archived=True)
-                    if note.archived and (
-                        self.search_query.lower() in note.title.lower()
-                        or self.search_query.lower() in note.content.lower()
-                    )
-                ]
-                seen = {note.id for note in notes}
-                notes.extend([note for note in archived_matches if note.id not in seen])
+            notes = self.db.search_notes(self.search_query, include_archived=include_archived)
+            used_indexed_search = True
         elif self.current_filter == "all":
-            include_archived = bool(self.advanced_filters.get("is_archived"))
             notes = self.db.get_all_notes(include_archived=include_archived)
         elif self.current_filter == "archived":
             notes = self.db.get_all_notes(include_archived=True)
@@ -6445,12 +6433,14 @@ class KeepSyncNotesApp(ctk.CTk):
             label = self.current_filter[6:]
             notes = self.db.get_notes_by_label(label)
         elif self.current_filter.startswith("saved:") and self.search_query:
-            notes = self.db.search_notes(self.search_query)
+            notes = self.db.search_notes(self.search_query, include_archived=include_archived)
+            used_indexed_search = True
+        elif self.current_filter.startswith("saved:"):
+            notes = self.db.get_all_notes(include_archived=include_archived)
         else:
             notes = self.db.get_all_notes()
-        
-        # Apply search filter
-        if self.search_query and not (self.current_filter == "all"):
+
+        if self.search_query and not (self.current_filter == "all") and not used_indexed_search:
             query_lower = self.search_query.lower()
             notes = [n for n in notes if 
                      query_lower in n.title.lower() or 
@@ -6458,6 +6448,16 @@ class KeepSyncNotesApp(ctk.CTk):
 
         if advanced_active:
             notes = [note for note in notes if note_matches_advanced_filters(note, self.advanced_filters)]
+        return notes
+
+    def _refresh_notes_list(self):
+        """Refresh the notes list based on current filter"""
+        # Clear existing cards
+        for card in self.note_cards:
+            card.destroy()
+        self.note_cards.clear()
+
+        notes = self._get_filtered_notes_for_current_view()
         self._update_filter_summary()
         
         # Update count

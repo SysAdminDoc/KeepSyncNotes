@@ -79,7 +79,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ## Research-Driven Additions
 
 ### P0 - Correctness, Security, and Packaging
-- **Fix saved-search FTS/filter regressions** - saved searches should preserve FTS matches from labels/checklists and filter-only archived searches should include archived notes. Evidence: `keepsync_notes.py:6447` and `keepsync_notes.py:6452` re-filter results by title/body only.
 - **Move cloud and Keep credentials into OS keyring** - migrate Keep master tokens and Google Drive tokens out of SQLite/plain JSON and provide a one-time cleanup path. Evidence: `keepsync_notes.py:1708`, `keepsync_notes.py:2524`, keyring platform support.
 - **Replace runtime dependency installation with deterministic packaging** - add explicit dependency files and remove startup/import-time pip installation. Evidence: tests triggered optional package installation; `keepsync_notes.py:21` and `keepsync_notes.py:104` run installers.
 - **Guard ZIP and bulk imports** - enforce archive member count, total uncompressed size, path traversal checks, extension allowlists, and progress cancellation before extraction. Evidence: `keepsync_notes.py:1585`, Python ZIP decompression-pitfall guidance.
