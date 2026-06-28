@@ -1,0 +1,100 @@
+# KeepSyncNotes Roadmap
+
+Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Mocha). Currently imports from Takeout and provides browse/search/tag/edit, pinned notes, nested checklists, Keep color swatches, local time reminders, imported sharing metadata, and local attachment previews. Roadmap pushes toward Keep feature parity, sync, and multi-source import.
+
+## Planned Features
+
+### Note Feature Parity
+
+### Import & Sync
+
+### Search & Organization
+- **Folders on top of labels** — hierarchical organization Keep doesn't offer
+- **Tag graph** — visualize notes by shared labels
+
+### Editor
+- **Rich-text / Markdown hybrid** — inline formatting toolbar, markdown shortcuts (`**bold**`)
+- **Image paste + drag-drop** — inline images, auto-resized to sensible width
+- **Audio recording inline** — record voice notes via `sounddevice`, transcribe via local Whisper
+- **Global hotkey** — `Ctrl+Alt+N` from anywhere to pop a quick-note capture window
+
+### Export & Portability
+- **Export all to Markdown vault** — Obsidian-compatible `notes/YYYY-MM-DD-title.md` with YAML frontmatter
+- **Export to PDF book** — compile selected notes into a single PDF
+- **Encrypted backup** — AES-GCM SQLite dump with password
+
+### UX
+- **Keyboard navigation** — j/k list nav, Enter to open, / to search, everything reachable without mouse
+- **Multi-window** — open a note in its own window for side-by-side
+- **System tray** — quick-capture from tray, notification center
+- **Dark/light theme** — keep Catppuccin as default, add a light Mocha counterpart (Latte)
+
+## Competitive Research
+- **Google Keep native** — web + Android + iOS, auto-sync, but no bulk ops and no export beyond Takeout. KeepSyncNotes wins on local + bulk + no cloud.
+- **Joplin** — biggest OSS note tool with real sync backends. Reference for encrypted sync design.
+- **Obsidian** — markdown-vault king; pairs well as an export target rather than a competitor.
+- **Standard Notes** — end-to-end encrypted, subscription-based for rich features. Take the security model as inspiration.
+- **TiddlyWiki** — single-file personal wiki; different shape but similar "your data, your file" philosophy.
+
+## Nice-to-Haves
+- Local semantic search via `fastembed` + lancedb (already proven in Bookmark Organizer Pro)
+- LLM summarization via LlamaLink endpoint for "summarize this week's notes"
+- Android companion app (Kotlin/Compose) that reads the same SQLite over Syncthing
+- OCR on imported images via Tesseract so handwritten scans are searchable
+- Daily review mode: surface 3 random old notes to refresh memory (Anki-style)
+- Import from clipboard history (Windows WinRT, macOS NSPasteboard) for captured snippets
+
+## Open-Source Research (Round 2)
+
+### Related OSS Projects
+- djsudduth/keep-it-markdown — https://github.com/djsudduth/keep-it-markdown — most feature-rich: bi-directional Keep ↔ markdown sync for Obsidian, Apple Notes, Logseq, Joplin, Notion
+- kiwiz/gkeepapi — https://github.com/kiwiz/gkeepapi — the unofficial Keep API every other tool wraps
+- ndbeals/keep-exporter — https://github.com/ndbeals/keep-exporter — clean CLI markdown exporter
+- vHanda/google-keep-exporter — https://github.com/vHanda/google-keep-exporter — export to markdown
+- k4j8/google-keep-takeout — https://github.com/k4j8/google-keep-takeout — uses Google Takeout data (no login required, offline-friendly)
+- bhngupta/KeepAPI — https://github.com/bhngupta/KeepAPI — thin Python wrapper example
+- usememos/memos — https://github.com/usememos/memos — 58k-star self-hosted Keep replacement; migration destination for power users
+- obsidianmd/obsidian-releases — plugin registry for "keep-to-obsidian" sync extensions worth tracking
+- Laurent22/joplin — https://github.com/laurent22/joplin — OSS note app with rich sync/import patterns to borrow
+
+### Features to Borrow
+- **Bi-directional sync, not just export** (keep-it-markdown) — edit a markdown file locally, push changes back to Keep; this is the "sync" KeepSyncNotes name implies
+- **Obsidian / Logseq / Joplin templated export** (keep-it-markdown) — target-aware front-matter, link syntax, attachment folder layout
+- **Google Takeout fallback path** (google-keep-takeout) — for users who won't hand over credentials; accept `Takeout.zip`, extract, convert
+- **Attachment sync** — download images/voice notes, rewrite links to relative paths in the exported markdown
+- **Label → tag mapping** — Keep labels become Obsidian tags / Logseq `#tags` / Joplin tags with a user-editable mapping table
+- **Checklist → GFM `- [ ]` task list** conversion — lossless round-trip (matters for bi-directional sync)
+- **Pin + color preservation as front-matter** — `pinned: true`, `color: yellow` in YAML; doesn't clutter body text, round-trips on re-import
+- **Incremental sync with last-sync timestamp** — avoid re-downloading unchanged notes; store timestamp per note ID
+- **Local SQLite cache** (Joplin-style) — offline read/edit, sync queue for when Keep API is reachable
+- **2FA/App Password handling with keyring** — gkeepapi needs an app password; use OS keyring (Windows Credential Manager / macOS Keychain) not plain config
+
+### Patterns & Architectures Worth Studying
+- keep-it-markdown's **`keep_sync()` loop** — stateless sync primitive; call returns a diff, caller decides what to apply
+- Joplin's **three-way merge** on conflicting edits (local + remote + base) — necessary for bi-directional sync; pure-export tools don't need this
+- Memos's **import adapters pattern** — one adapter per source (Keep, Notion, Evernote, Obsidian); structured pipeline rather than per-source scripts
+- gkeepapi's **auth/session persistence** — master token stored once, session tokens refreshed transparently; avoids re-login on every run
+- **Conflict resolution UI** for bi-directional mode — side-by-side diff view, pick-per-note or bulk accept-local/accept-remote
+
+## Research-Driven Additions
+
+### P0 - Correctness, Security, and Packaging
+- **Fix saved-search FTS/filter regressions** - saved searches should preserve FTS matches from labels/checklists and filter-only archived searches should include archived notes. Evidence: `keepsync_notes.py:6447` and `keepsync_notes.py:6452` re-filter results by title/body only.
+- **Move cloud and Keep credentials into OS keyring** - migrate Keep master tokens and Google Drive tokens out of SQLite/plain JSON and provide a one-time cleanup path. Evidence: `keepsync_notes.py:1708`, `keepsync_notes.py:2524`, keyring platform support.
+- **Replace runtime dependency installation with deterministic packaging** - add explicit dependency files and remove startup/import-time pip installation. Evidence: tests triggered optional package installation; `keepsync_notes.py:21` and `keepsync_notes.py:104` run installers.
+- **Guard ZIP and bulk imports** - enforce archive member count, total uncompressed size, path traversal checks, extension allowlists, and progress cancellation before extraction. Evidence: `keepsync_notes.py:1585`, Python ZIP decompression-pitfall guidance.
+
+### P1 - Data Safety and Maintainability
+- **Add versioned local backup and restore before import/sync** - create restorable snapshots before Takeout import, multi-source import, Drive sync, and GitHub sync; expose a restore flow in-app.
+- **Add diagnostics panel and crash log file** - surface import/sync/auth errors, dependency state, database path, attachment path, and last exception without requiring console output.
+- **Define cloud sync conflict semantics with dry-run diffs** - each provider should report create/update/delete/conflict counts before applying changes, keep a base version, and write conflict copies when both sides change.
+- **Split the monolith into testable modules** - extract models, storage, importers, sync providers, UI dialogs, and packaging/bootstrap code from `keepsync_notes.py` before adding larger sync or export features.
+- **Add import fidelity reports** - after each import, show counts for notes, checklists, attachments, labels, reminders, archived/trashed state, shared metadata, unsupported fields, skipped files, and conflicts.
+- **Replace destructive confirmation dialogs with undoable status workflows** - convert delete/permanent-delete operations to status/toast plus undo or restore history where practical.
+
+### P2 - Platform Quality
+- **Add accessible modal focus management** - align dialogs with WAI-ARIA modal expectations where Tk allows it: initial focus, trapped tab order, Escape behavior, close control, and focus return.
+- **Add app data directory abstraction** - replace direct `~/.keepsync_notes` paths with a platform directory helper so data/config/log/token locations are predictable on Windows, macOS, and Linux.
+
+### P3 - Strategic Evaluation
+- **Evaluate official Google Keep API support for Workspace accounts** - document whether read/write integration can use the official API for eligible accounts while preserving Takeout as the default safe import path.
