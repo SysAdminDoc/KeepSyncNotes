@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.16.0] - 2026-06-28
+
+- Added versioned local ZIP backups containing the SQLite database, manifest, and attachment files.
+- Created automatic pre-change backups before imports, Keep sync, Drive sync, and GitHub sync.
+- Added Data-tab controls for manual backup creation and in-app restore with a pre-restore safety backup.
+
 ## [v1.15.0] - 2026-06-28
 
 - Added ZIP import safety guards for member counts, uncompressed size, path traversal, and extension allowlists.
