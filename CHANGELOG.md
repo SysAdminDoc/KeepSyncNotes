@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.13.0] - 2026-06-28
+
+- Moved Keep master tokens, Google Drive OAuth tokens, and GitHub PATs into the OS keyring.
+- Added one-time migration and cleanup for legacy SQLite Keep tokens and Google Drive token JSON files.
+- Removed the CLI path that saved Keep master tokens to `master_token.txt`.
+
 ## [v1.12.1] - 2026-06-28
 
 - Fixed saved searches so FTS matches from labels and checklist items remain visible.

@@ -1,6 +1,6 @@
 # KeepSyncNotes
 
-![Version](https://img.shields.io/badge/version-1.12.1-blue)
+![Version](https://img.shields.io/badge/version-1.13.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Language](https://img.shields.io/badge/language-Python-3776AB)
 ![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
@@ -28,6 +28,7 @@ Dependencies auto-install on first run. No manual `pip install` needed.
 - **Reminders** — Store local date/time reminders, optional location context, and desktop notifications when available
 - **Sharing Metadata** — Preserve imported "shared with" collaborator metadata without re-sharing notes
 - **Attachments** — Copy imported Keep media locally and show image thumbnails inline
+- **OS Keyring Credentials** — Keep, Google Drive, and GitHub sync secrets are stored in the platform credential store with legacy plaintext cleanup
 - **Markdown Preview** — Notes tagged `.md` can switch between editable source and rendered preview
 - **Ranked Full-Text Search** — SQLite FTS5 search across titles, bodies, checklist items, and labels
 - **Advanced Filters** — Combine label, color, date range, image, checklist, and archive filters with AND/OR logic

@@ -36,6 +36,7 @@ def install_dependencies():
         "gpsoauth": ("gpsoauth", "Google auth tokens", False),  # Optional, for token generation
         "browser-cookie3": ("browser_cookie3", "Browser cookie extraction", False),  # Optional
         "plyer": ("plyer", "Desktop notifications", False),  # Optional
+        "keyring": ("keyring", "OS credential storage", True),
         "PyGithub": ("github", "GitHub API client", False),  # Optional, for GitHub sync
         "google-api-python-client": ("googleapiclient", "Google API client", False),  # Optional, for Drive sync
         "google-auth-oauthlib": ("google_auth_oauthlib", "Google OAuth", False),  # Optional, for Drive sync
@@ -168,6 +169,13 @@ from enum import Enum
 import webbrowser
 import uuid
 
+try:
+    import keyring
+    KEYRING_AVAILABLE = True
+except ImportError:
+    keyring = None
+    KEYRING_AVAILABLE = False
+
 # Optional: gkeepapi for Google Keep sync
 try:
     import gkeepapi
@@ -187,8 +195,12 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.12.1"
+APP_VERSION = "1.13.0"
 DB_VERSION = 1
+KEYRING_SERVICE = "KeepSyncNotes"
+KEEP_MASTER_TOKEN_CREDENTIAL = "google_keep_master_token"
+GDRIVE_OAUTH_TOKEN_CREDENTIAL = "google_drive_oauth_token"
+GITHUB_PAT_CREDENTIAL = "github_personal_access_token"
 
 # Theme Colors (User's preferred palette)
 COLORS = {
@@ -518,6 +530,114 @@ def copy_attachment_to_store(source_path: Path, attachments_root: Path, note_id:
         counter += 1
     shutil.copy2(source_path, destination)
     return destination
+
+
+class KeyringCredentialStore:
+    """Small wrapper around the OS credential store used for sync secrets."""
+
+    service_name = KEYRING_SERVICE
+
+    def __init__(self):
+        self.last_error = ""
+
+    def _available(self) -> bool:
+        if KEYRING_AVAILABLE and keyring is not None:
+            return True
+        self.last_error = "Python keyring package is not available."
+        return False
+
+    def get_secret(self, key: str) -> Optional[str]:
+        if not self._available():
+            return None
+        try:
+            return keyring.get_password(self.service_name, key)
+        except Exception as e:
+            self.last_error = str(e)
+            return None
+
+    def set_secret(self, key: str, value: str) -> bool:
+        if not value:
+            return self.delete_secret(key)
+        if not self._available():
+            return False
+        try:
+            keyring.set_password(self.service_name, key, value)
+            self.last_error = ""
+            return True
+        except Exception as e:
+            self.last_error = str(e)
+            return False
+
+    def delete_secret(self, key: str) -> bool:
+        if not self._available():
+            return False
+        try:
+            keyring.delete_password(self.service_name, key)
+            self.last_error = ""
+            return True
+        except Exception as e:
+            if "not found" not in str(e).lower():
+                self.last_error = str(e)
+            return False
+
+
+SECURE_CREDENTIALS = KeyringCredentialStore()
+
+
+def set_secure_credential_store(store: Any):
+    """Swap the credential store for tests."""
+    global SECURE_CREDENTIALS
+    SECURE_CREDENTIALS = store
+
+
+def migrate_setting_secret(db: Any, setting_key: str, credential_key: str) -> Optional[str]:
+    """Move a legacy SQLite setting secret into the OS credential store."""
+    secret = SECURE_CREDENTIALS.get_secret(credential_key)
+    legacy_secret = db.get_setting(setting_key)
+    if not legacy_secret:
+        return secret
+
+    if SECURE_CREDENTIALS.set_secret(credential_key, str(legacy_secret)):
+        if hasattr(db, "delete_setting"):
+            db.delete_setting(setting_key)
+        else:
+            db.set_setting(setting_key, None)
+        return str(legacy_secret)
+    return secret or str(legacy_secret)
+
+
+def migrate_file_secret(file_path: str, credential_key: str) -> Optional[str]:
+    """Move a legacy token file into the OS credential store."""
+    path = Path(file_path)
+    secret = SECURE_CREDENTIALS.get_secret(credential_key)
+    legacy_secret = ""
+    if path.exists():
+        legacy_secret = path.read_text(encoding="utf-8").strip()
+
+    if legacy_secret and not secret:
+        if SECURE_CREDENTIALS.set_secret(credential_key, legacy_secret):
+            secret = legacy_secret
+
+    if secret and path.exists():
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+    return secret or legacy_secret or None
+
+
+def store_file_secret(credential_key: str, value: str, legacy_file_path: Optional[str] = None) -> bool:
+    """Persist a token in the OS credential store and remove any legacy file copy."""
+    if not SECURE_CREDENTIALS.set_secret(credential_key, value):
+        return False
+    if legacy_file_path:
+        try:
+            Path(legacy_file_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return True
+
 
 def import_takeout_attachments(data: dict, base_path: Optional[Path], attachments_root: Path, note_id: str) -> List["Attachment"]:
     attachments = []
@@ -1409,6 +1529,16 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error saving setting: {e}")
             return False
+
+    def delete_setting(self, key: str) -> bool:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM settings WHERE key = ?", (key,))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error deleting setting: {e}")
+            return False
     
     def log_sync(self, action: str, note_id: str, status: str, message: str):
         """Log sync activity"""
@@ -1706,12 +1836,19 @@ class KeepSyncEngine:
                 return False, "Either master_token or password required"
             
             self.is_authenticated = True
-            # Save token for future sessions
             self.db.set_setting("keep_email", email)
+            token_to_store = master_token
             try:
-                self.db.set_setting("keep_master_token", self.keep.getMasterToken())
+                token_to_store = self.keep.getMasterToken() or token_to_store
             except:
                 pass  # Token retrieval may fail on some auth methods
+            if token_to_store:
+                if SECURE_CREDENTIALS.set_secret(KEEP_MASTER_TOKEN_CREDENTIAL, token_to_store):
+                    self.db.delete_setting("keep_master_token")
+                else:
+                    self.db.log_sync("credentials", "google_keep", "warning", SECURE_CREDENTIALS.last_error)
+                    self._notify_callbacks("connected", "Connected to Google Keep")
+                    return True, "Connected to Google Keep. Token was not saved because OS keyring is unavailable."
             
             self._notify_callbacks("connected", "Connected to Google Keep")
             return True, "Successfully connected to Google Keep"
@@ -1733,7 +1870,7 @@ class KeepSyncEngine:
             return False
         
         email = self.db.get_setting("keep_email")
-        token = self.db.get_setting("keep_master_token")
+        token = migrate_setting_secret(self.db, "keep_master_token", KEEP_MASTER_TOKEN_CREDENTIAL)
         
         if email and token:
             try:
@@ -1751,7 +1888,8 @@ class KeepSyncEngine:
         self.is_authenticated = False
         self.keep = gkeepapi.Keep() if GKEEPAPI_AVAILABLE else None
         self.db.set_setting("keep_email", None)
-        self.db.set_setting("keep_master_token", None)
+        self.db.delete_setting("keep_master_token")
+        SECURE_CREDENTIALS.delete_secret(KEEP_MASTER_TOKEN_CREDENTIAL)
         self._notify_callbacks("disconnected", "Disconnected from Google Keep")
     
     def sync(self, full_sync: bool = False) -> tuple[bool, str, dict]:
@@ -2102,18 +2240,16 @@ def get_master_token_cli():
         print("=" * 60)
         print()
         print("Copy this token and paste it in the app's Settings dialog.")
-        print("The token is saved and you won't need to do this again.")
+        print("The app stores saved tokens in the OS keyring.")
         print()
         
-        # Offer to save to file
-        save = input("Save token to file 'master_token.txt'? (y/n): ").strip().lower()
+        # Offer to save to the OS credential store
+        save = input("Save token to OS keyring for KeepSync Notes? (y/n): ").strip().lower()
         if save == 'y':
-            with open("master_token.txt", "w") as f:
-                f.write(f"# Google Keep Master Token for {email}\n")
-                f.write(f"# Generated by KeepSync Notes\n")
-                f.write(f"# Keep this file secure!\n\n")
-                f.write(master_token)
-            print("Token saved to master_token.txt")
+            if SECURE_CREDENTIALS.set_secret(KEEP_MASTER_TOKEN_CREDENTIAL, master_token):
+                print("Token saved to OS keyring.")
+            else:
+                print(f"Could not save token to OS keyring: {SECURE_CREDENTIALS.last_error}")
         
         return master_token
         
@@ -2530,9 +2666,10 @@ class GoogleDriveSync(CloudSyncProvider):
             
             creds = None
             
-            # Load existing token
-            if os.path.exists(token_path):
-                creds = Credentials.from_authorized_user_file(token_path, self.SCOPES)
+            # Load existing token from OS keyring, migrating the old JSON token file if present.
+            token_json = migrate_file_secret(token_path, GDRIVE_OAUTH_TOKEN_CREDENTIAL)
+            if token_json:
+                creds = Credentials.from_authorized_user_info(json.loads(token_json), self.SCOPES)
             
             # Refresh or get new credentials
             if not creds or not creds.valid:
@@ -2553,10 +2690,8 @@ class GoogleDriveSync(CloudSyncProvider):
                     flow = InstalledAppFlow.from_client_secrets_file(credentials_path, self.SCOPES)
                     creds = flow.run_local_server(port=0)
                 
-                # Save token for next time
-                os.makedirs(os.path.dirname(token_path), exist_ok=True)
-                with open(token_path, 'w') as f:
-                    f.write(creds.to_json())
+                if not store_file_secret(GDRIVE_OAUTH_TOKEN_CREDENTIAL, creds.to_json(), token_path):
+                    return False, f"Google Drive token was not saved because OS keyring is unavailable: {SECURE_CREDENTIALS.last_error}"
             
             self.creds = creds
             self.service = build('drive', 'v3', credentials=creds)
@@ -2602,6 +2737,7 @@ class GoogleDriveSync(CloudSyncProvider):
         self.folder_id = None
         self.is_connected = False
         self.db.set_setting("cloud_provider", None)
+        SECURE_CREDENTIALS.delete_secret(GDRIVE_OAUTH_TOKEN_CREDENTIAL)
         self._notify("disconnected", "Disconnected from Google Drive")
     
     def sync(self) -> tuple[bool, str, dict]:
@@ -2727,7 +2863,7 @@ class GitHubSync(CloudSyncProvider):
     def get_provider_name(self) -> str:
         return "GitHub"
     
-    def connect(self, token: str, repo_name: str, create_if_missing: bool = True) -> tuple[bool, str]:
+    def connect(self, token: str = None, repo_name: str = "", create_if_missing: bool = True) -> tuple[bool, str]:
         """
         Connect to GitHub and set up the notes repository.
         
@@ -2749,6 +2885,10 @@ class GitHubSync(CloudSyncProvider):
                 ], capture_output=True)
                 from github import Github, GithubException
             
+            token = token or migrate_setting_secret(self.db, "github_token", GITHUB_PAT_CREDENTIAL)
+            if not token:
+                return False, "GitHub token not found in the OS keyring. Enter a token once to save it securely."
+
             self.github = Github(token)
             self.token = token
             self.repo_name = repo_name
@@ -2785,7 +2925,11 @@ class GitHubSync(CloudSyncProvider):
             self.is_connected = True
             self.db.set_setting("cloud_provider", "github")
             self.db.set_setting("github_repo", repo_name)
-            # Don't store token in plain text - user needs to re-enter
+            if not SECURE_CREDENTIALS.set_secret(GITHUB_PAT_CREDENTIAL, token):
+                self.db.log_sync("credentials", "github", "warning", SECURE_CREDENTIALS.last_error)
+                self._notify("connected", f"Connected to GitHub: {repo_name}")
+                return True, f"Connected to GitHub repository: {repo_name}. Token was not saved because OS keyring is unavailable."
+            self.db.delete_setting("github_token")
             
             self._notify("connected", f"Connected to GitHub: {repo_name}")
             return True, f"Connected to GitHub repository: {repo_name}"
@@ -2800,6 +2944,8 @@ class GitHubSync(CloudSyncProvider):
         self.token = None
         self.is_connected = False
         self.db.set_setting("cloud_provider", None)
+        self.db.delete_setting("github_token")
+        SECURE_CREDENTIALS.delete_secret(GITHUB_PAT_CREDENTIAL)
         self._notify("disconnected", "Disconnected from GitHub")
     
     def sync(self) -> tuple[bool, str, dict]:
@@ -2966,7 +3112,7 @@ class CloudSyncManager:
             self.active_provider = provider
         return success, message
     
-    def connect_github(self, token: str, repo_name: str) -> tuple[bool, str]:
+    def connect_github(self, token: str = None, repo_name: str = "") -> tuple[bool, str]:
         """Connect to GitHub"""
         provider = self.providers["github"]
         success, message = provider.connect(token=token, repo_name=repo_name)
@@ -5103,7 +5249,7 @@ class SettingsDialog(ctk.CTkToplevel):
         
         self.github_token_entry = ctk.CTkEntry(
             github_frame,
-            placeholder_text="ghp_xxxxxxxxxxxxxxxxxxxx",
+            placeholder_text="Leave blank to reuse saved keyring token",
             font=ctk.CTkFont(size=12),
             height=38,
             fg_color=COLORS["bg_dark"],
@@ -5608,10 +5754,6 @@ class SettingsDialog(ctk.CTkToplevel):
         
         token = self.github_token_entry.get().strip()
         repo = self.github_repo_entry.get().strip()
-        
-        if not token:
-            messagebox.showerror("Error", "Please enter your GitHub Personal Access Token")
-            return
         
         if not repo:
             repo = "keepsync-notes-backup"
@@ -6721,6 +6863,18 @@ class KeepSyncNotesApp(ctk.CTk):
                         self.cloud_sync.start_auto_sync(interval)
             except:
                 pass
+        elif provider == "github":
+            repo = self.db.get_setting("github_repo", "")
+            if repo:
+                try:
+                    success, _ = self.cloud_sync.connect_github(None, repo)
+                    if success:
+                        self._update_cloud_status_display()
+                        if self.db.get_setting("cloud_auto_sync", True):
+                            interval = self.db.get_setting("cloud_sync_interval", 15)
+                            self.cloud_sync.start_auto_sync(interval)
+                except:
+                    pass
     
     def _on_cloud_sync_status_change(self, status: str, message: str):
         """Handle cloud sync status changes"""
