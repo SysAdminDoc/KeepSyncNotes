@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.12.0] - 2026-06-28
+
+- Added saved searches backed by local settings storage.
+- Added a sidebar Saved Searches section that opens saved query/filter combinations as virtual folders.
+- Added a Save action beside advanced filters for persisting the current search state.
+
 ## [v1.11.0] - 2026-06-27
 
 - Added an advanced filters dialog with AND/OR matching.

@@ -187,7 +187,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.11.0"
+APP_VERSION = "1.12.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -6057,6 +6057,9 @@ class KeepSyncNotesApp(ctk.CTk):
         self.current_filter = "all"  # all, archived, trash, label:<name>
         self.search_query = ""
         self.advanced_filters = default_advanced_filters()
+        self.saved_searches = self.db.get_setting("saved_searches", [])
+        if not isinstance(self.saved_searches, list):
+            self.saved_searches = []
         self.selected_note: Optional[Note] = None
         self._reminder_after_id = None
         self._takeout_watch_after_id = None
@@ -6203,6 +6206,20 @@ class KeepSyncNotesApp(ctk.CTk):
             height=200
         )
         self.labels_frame.pack(fill="x", padx=8)
+
+        ctk.CTkLabel(
+            sidebar,
+            text="SAVED SEARCHES",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=COLORS["text_muted"]
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+
+        self.saved_searches_frame = ctk.CTkScrollableFrame(
+            sidebar,
+            fg_color="transparent",
+            height=120
+        )
+        self.saved_searches_frame.pack(fill="x", padx=8)
         
         # Sync status section
         sync_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
@@ -6243,6 +6260,7 @@ class KeepSyncNotesApp(ctk.CTk):
         # Set initial nav state
         self._update_nav_state()
         self._refresh_labels()
+        self._refresh_saved_searches()
     
     def _build_notes_list(self):
         """Build the notes list panel"""
@@ -6294,6 +6312,19 @@ class KeepSyncNotesApp(ctk.CTk):
             command=self._open_advanced_filters
         )
         filter_btn.pack(side="right")
+
+        save_search_btn = ctk.CTkButton(
+            filter_row,
+            text="Save",
+            font=ctk.CTkFont(size=12),
+            width=58,
+            height=30,
+            fg_color=COLORS["bg_medium"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self._save_current_search
+        )
+        save_search_btn.pack(side="right", padx=(0, 8))
         
         # Notes count
         self.notes_count_label = ctk.CTkLabel(
@@ -6362,6 +6393,7 @@ class KeepSyncNotesApp(ctk.CTk):
         """Set the current filter and refresh notes"""
         self.current_filter = filter_key
         self._update_nav_state()
+        self._refresh_saved_searches()
         self._refresh_notes_list()
     
     def _update_nav_state(self):
@@ -6412,6 +6444,8 @@ class KeepSyncNotesApp(ctk.CTk):
         elif self.current_filter.startswith("label:"):
             label = self.current_filter[6:]
             notes = self.db.get_notes_by_label(label)
+        elif self.current_filter.startswith("saved:") and self.search_query:
+            notes = self.db.search_notes(self.search_query)
         else:
             notes = self.db.get_all_notes()
         
@@ -6462,6 +6496,26 @@ class KeepSyncNotesApp(ctk.CTk):
                 command=lambda l=label.name: self._set_filter(f"label:{l}")
             )
             btn.pack(fill="x", pady=1)
+
+    def _refresh_saved_searches(self):
+        if not hasattr(self, "saved_searches_frame"):
+            return
+        for widget in self.saved_searches_frame.winfo_children():
+            widget.destroy()
+        for saved in self.saved_searches:
+            btn = ctk.CTkButton(
+                self.saved_searches_frame,
+                text=saved.get("name", "Saved search"),
+                image=IconManager.get_icon("search", 16, COLORS["accent_cyan"]),
+                font=ctk.CTkFont(size=12),
+                height=34,
+                fg_color=COLORS["bg_light"] if self.current_filter == f"saved:{saved.get('id')}" else "transparent",
+                hover_color=COLORS["bg_hover"],
+                text_color=COLORS["text_secondary"],
+                anchor="w",
+                command=lambda item=saved: self._open_saved_search(item)
+            )
+            btn.pack(fill="x", pady=1)
     
     def _on_search(self, event=None):
         """Handle search input"""
@@ -6474,6 +6528,37 @@ class KeepSyncNotesApp(ctk.CTk):
     def _apply_advanced_filters(self, filters: Dict[str, Any]):
         self.advanced_filters = dict(default_advanced_filters())
         self.advanced_filters.update(filters or {})
+        self._refresh_notes_list()
+
+    def _save_current_search(self):
+        if not self.search_query and not advanced_filters_active(self.advanced_filters):
+            self.sync_status_label.configure(text="No search to save", text_color=COLORS["text_muted"])
+            return
+        dialog = ctk.CTkInputDialog(text="Saved search name:", title="Save Search")
+        name = dialog.get_input()
+        if not name:
+            return
+        saved = {
+            "id": str(uuid.uuid4()),
+            "name": name.strip(),
+            "query": self.search_query,
+            "filters": dict(self.advanced_filters),
+        }
+        self.saved_searches.append(saved)
+        self.db.set_setting("saved_searches", self.saved_searches)
+        self._refresh_saved_searches()
+        self.sync_status_label.configure(text="Saved search", text_color=COLORS["accent_green"])
+
+    def _open_saved_search(self, saved: Dict[str, Any]):
+        self.current_filter = f"saved:{saved.get('id')}"
+        self.search_query = saved.get("query", "")
+        self.search_entry.delete(0, "end")
+        if self.search_query:
+            self.search_entry.insert(0, self.search_query)
+        self.advanced_filters = dict(default_advanced_filters())
+        self.advanced_filters.update(saved.get("filters") or {})
+        self._update_nav_state()
+        self._refresh_saved_searches()
         self._refresh_notes_list()
 
     def _update_filter_summary(self):
