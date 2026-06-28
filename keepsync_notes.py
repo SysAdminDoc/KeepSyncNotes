@@ -44,7 +44,7 @@ import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from html import unescape
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Callable
 from enum import Enum
@@ -77,12 +77,17 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.14.0"
+APP_VERSION = "1.15.0"
 DB_VERSION = 1
 KEYRING_SERVICE = "KeepSyncNotes"
 KEEP_MASTER_TOKEN_CREDENTIAL = "google_keep_master_token"
 GDRIVE_OAUTH_TOKEN_CREDENTIAL = "google_drive_oauth_token"
 GITHUB_PAT_CREDENTIAL = "github_personal_access_token"
+MAX_IMPORT_ZIP_MEMBERS = 5000
+MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+MAX_IMPORT_TEXT_MEMBER_BYTES = 25 * 1024 * 1024
+MAX_IMPORT_FOLDER_FILES = 10000
+MAX_IMPORT_FOLDER_BYTES = 512 * 1024 * 1024
 
 # Theme Colors (User's preferred palette)
 COLORS = {
@@ -642,6 +647,8 @@ def parse_external_datetime(value: Any) -> Optional[datetime]:
     return None
 
 def decode_zip_member(zf: zipfile.ZipFile, member: zipfile.ZipInfo) -> str:
+    if member.file_size > MAX_IMPORT_TEXT_MEMBER_BYTES:
+        raise ImportSafetyError(f"Import member is too large: {member.filename}")
     raw = zf.read(member)
     for encoding in ("utf-8-sig", "utf-8", "utf-16", "cp1252"):
         try:
@@ -652,6 +659,87 @@ def decode_zip_member(zf: zipfile.ZipFile, member: zipfile.ZipInfo) -> str:
 
 def is_hidden_or_system_path(path_text: str) -> bool:
     return any(part.startswith(".") or part == "__MACOSX" for part in Path(path_text).parts)
+
+
+class ImportSafetyError(ValueError):
+    """Raised when an import archive or folder violates safety limits."""
+
+
+class ImportCancelled(Exception):
+    """Raised when the user cancels a long-running import."""
+
+
+def safe_zip_member_parts(filename: str) -> Optional[PurePosixPath]:
+    normalized = (filename or "").replace("\\", "/")
+    if not normalized or normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        return None
+    path = PurePosixPath(normalized)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    return path
+
+
+def validate_zip_members(
+    zf: zipfile.ZipFile,
+    allowed_suffixes: Optional[set] = None,
+    include_hidden: bool = False,
+) -> List[zipfile.ZipInfo]:
+    members = []
+    total_size = 0
+    checked_count = 0
+    for member in zf.infolist():
+        if member.is_dir():
+            continue
+        member_path = safe_zip_member_parts(member.filename)
+        if member_path is None:
+            raise ImportSafetyError(f"Unsafe ZIP member path: {member.filename}")
+        if not include_hidden and is_hidden_or_system_path(member.filename):
+            continue
+        checked_count += 1
+        total_size += max(0, member.file_size)
+        if checked_count > MAX_IMPORT_ZIP_MEMBERS:
+            raise ImportSafetyError(f"ZIP contains more than {MAX_IMPORT_ZIP_MEMBERS} importable files")
+        if total_size > MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES:
+            raise ImportSafetyError("ZIP uncompressed size exceeds the import limit")
+        suffix = member_path.suffix.lower()
+        if allowed_suffixes is not None and suffix not in allowed_suffixes:
+            continue
+        members.append(member)
+    return members
+
+
+def extract_zip_member_safely(zf: zipfile.ZipFile, member: zipfile.ZipInfo, destination: Path) -> Path:
+    member_path = safe_zip_member_parts(member.filename)
+    if member_path is None:
+        raise ImportSafetyError(f"Unsafe ZIP member path: {member.filename}")
+    target = destination.joinpath(*member_path.parts)
+    resolved_destination = destination.resolve()
+    resolved_target = target.resolve(strict=False)
+    try:
+        resolved_target.relative_to(resolved_destination)
+    except ValueError:
+        raise ImportSafetyError(f"ZIP member escapes import directory: {member.filename}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with zf.open(member) as source, open(target, "wb") as output:
+        shutil.copyfileobj(source, output)
+    return target
+
+
+def guarded_import_files(folder: Path, allowed_suffixes: set) -> List[Path]:
+    files = []
+    total_size = 0
+    for file_path in folder.rglob("*"):
+        if not file_path.is_file() or is_hidden_or_system_path(str(file_path.relative_to(folder))):
+            continue
+        if file_path.suffix.lower() not in allowed_suffixes:
+            continue
+        total_size += file_path.stat().st_size
+        if len(files) >= MAX_IMPORT_FOLDER_FILES:
+            raise ImportSafetyError(f"Import folder contains more than {MAX_IMPORT_FOLDER_FILES} files")
+        if total_size > MAX_IMPORT_FOLDER_BYTES:
+            raise ImportSafetyError("Import folder size exceeds the import limit")
+        files.append(file_path)
+    return files
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA MODELS
@@ -1443,9 +1531,30 @@ class MultiSourceImporter:
 
     TEXT_SUFFIXES = {".txt", ".md", ".markdown"}
     HTML_SUFFIXES = {".html", ".htm", ".mht", ".mhtml"}
+    TAKEOUT_ATTACHMENT_SUFFIXES = {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff",
+        ".svg", ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".opus", ".aac",
+        ".amr", ".3gp", ".mp4", ".mov", ".pdf",
+    }
+    TAKEOUT_ZIP_SUFFIXES = {".json"} | TAKEOUT_ATTACHMENT_SUFFIXES
 
-    def __init__(self, db: DatabaseManager):
+    def __init__(
+        self,
+        db: DatabaseManager,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ):
         self.db = db
+        self.progress_callback = progress_callback
+        self.cancel_check = cancel_check
+
+    def _check_cancelled(self):
+        if self.cancel_check and self.cancel_check():
+            raise ImportCancelled("Import cancelled")
+
+    def _progress(self, message: str, current: int, total: int):
+        if self.progress_callback:
+            self.progress_callback(message, current, total)
 
     def save_notes(self, notes: List[Note]) -> int:
         imported = 0
@@ -1497,12 +1606,12 @@ class MultiSourceImporter:
 
     def import_text_folder(self, folder: Path, source: str, markdown_default: bool = False) -> List[Note]:
         notes = []
-        for file_path in folder.rglob("*"):
-            if not file_path.is_file() or is_hidden_or_system_path(str(file_path.relative_to(folder))):
-                continue
+        files = guarded_import_files(folder, self.TEXT_SUFFIXES | self.HTML_SUFFIXES)
+        total = len(files)
+        for index, file_path in enumerate(files, start=1):
+            self._check_cancelled()
+            self._progress(f"Reading {file_path.name}", index, total)
             suffix = file_path.suffix.lower()
-            if suffix not in self.TEXT_SUFFIXES and suffix not in self.HTML_SUFFIXES:
-                continue
             raw = file_path.read_text(encoding="utf-8-sig", errors="replace")
             content = html_to_text(raw) if suffix in self.HTML_SUFFIXES else raw
             relative_parent = file_path.relative_to(folder).parent
@@ -1514,11 +1623,12 @@ class MultiSourceImporter:
     def import_text_zip(self, path: Path, source: str, markdown_default: bool = False) -> List[Note]:
         notes = []
         with zipfile.ZipFile(path) as zf:
-            members = [member for member in zf.infolist() if not member.is_dir() and not is_hidden_or_system_path(member.filename)]
-            for member in members:
+            members = validate_zip_members(zf, self.TEXT_SUFFIXES | self.HTML_SUFFIXES)
+            total = len(members)
+            for index, member in enumerate(members, start=1):
+                self._check_cancelled()
+                self._progress(f"Reading {Path(member.filename).name}", index, total)
                 suffix = Path(member.filename).suffix.lower()
-                if suffix not in self.TEXT_SUFFIXES and suffix not in self.HTML_SUFFIXES:
-                    continue
                 content = decode_zip_member(zf, member)
                 if suffix in self.HTML_SUFFIXES:
                     content = html_to_text(content)
@@ -1558,9 +1668,12 @@ class MultiSourceImporter:
 
         notes = []
         with zipfile.ZipFile(path) as zf:
-            members = [member for member in zf.infolist() if not member.is_dir() and not is_hidden_or_system_path(member.filename)]
+            members = validate_zip_members(zf, self.TEXT_SUFFIXES | self.HTML_SUFFIXES | {".json"})
             json_members = [member for member in members if Path(member.filename).suffix.lower() == ".json"]
-            for member in json_members:
+            total = len(json_members)
+            for index, member in enumerate(json_members, start=1):
+                self._check_cancelled()
+                self._progress(f"Reading {Path(member.filename).name}", index, total)
                 try:
                     parsed = json.loads(decode_zip_member(zf, member))
                     notes.extend(self.import_simplenote_json(parsed))
@@ -1586,7 +1699,16 @@ class MultiSourceImporter:
 
     def import_takeout_folder(self, folder: Path) -> List[Note]:
         notes = []
-        for json_file in self._takeout_json_files(folder):
+        json_files = self._takeout_json_files(folder)
+        if len(json_files) > MAX_IMPORT_FOLDER_FILES:
+            raise ImportSafetyError(f"Takeout folder contains more than {MAX_IMPORT_FOLDER_FILES} JSON files")
+        total_size = sum(file_path.stat().st_size for file_path in json_files)
+        if total_size > MAX_IMPORT_FOLDER_BYTES:
+            raise ImportSafetyError("Takeout folder JSON size exceeds the import limit")
+        total = len(json_files)
+        for index, json_file in enumerate(json_files, start=1):
+            self._check_cancelled()
+            self._progress(f"Reading {json_file.name}", index, total)
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
                 note = self.parse_takeout_note(data, json_file.parent)
@@ -1599,7 +1721,12 @@ class MultiSourceImporter:
     def import_takeout_zip(self, path: Path) -> List[Note]:
         with tempfile.TemporaryDirectory() as temp_dir:
             with zipfile.ZipFile(path) as zf:
-                zf.extractall(temp_dir)
+                members = validate_zip_members(zf, self.TAKEOUT_ZIP_SUFFIXES)
+                total = len(members)
+                for index, member in enumerate(members, start=1):
+                    self._check_cancelled()
+                    self._progress(f"Extracting {Path(member.filename).name}", index, total)
+                    extract_zip_member_safely(zf, member, Path(temp_dir))
             return self.import_takeout_folder(Path(temp_dir))
 
     def import_takeout_path(self, path: Path) -> List[Note]:
@@ -4947,6 +5074,63 @@ class TokenGeneratorDialog(ctk.CTkToplevel):
             self.destroy()
 
 
+class ImportProgressDialog(ctk.CTkToplevel):
+    """Cancellable modal progress for archive and bulk imports."""
+
+    def __init__(self, parent, title: str):
+        super().__init__(parent)
+        self.cancelled = False
+        self.title(title)
+        self.geometry("420x180")
+        self.configure(fg_color=COLORS["bg_dark"])
+        self.transient(parent)
+        self.grab_set()
+
+        ctk.CTkLabel(
+            self,
+            text=title,
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=COLORS["text_primary"],
+        ).pack(anchor="w", padx=20, pady=(20, 8))
+
+        self.status_label = ctk.CTkLabel(
+            self,
+            text="Preparing import...",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_secondary"],
+        )
+        self.status_label.pack(anchor="w", padx=20, pady=(0, 12))
+
+        self.progress_bar = ctk.CTkProgressBar(self, mode="determinate")
+        self.progress_bar.set(0)
+        self.progress_bar.pack(fill="x", padx=20, pady=(0, 16))
+
+        self.cancel_btn = ctk.CTkButton(
+            self,
+            text="Cancel",
+            font=ctk.CTkFont(size=12),
+            height=34,
+            fg_color=COLORS["bg_light"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            command=self.cancel,
+        )
+        self.cancel_btn.pack(anchor="e", padx=20)
+
+    def cancel(self):
+        self.cancelled = True
+        self.cancel_btn.configure(state="disabled", text="Cancelling...")
+        self.status_label.configure(text="Cancelling after the current file...", text_color=COLORS["accent_yellow"])
+
+    def is_cancelled(self) -> bool:
+        return self.cancelled
+
+    def set_progress(self, message: str, current: int, total: int):
+        total = max(total, 1)
+        self.status_label.configure(text=f"{message} ({current}/{total})", text_color=COLORS["text_secondary"])
+        self.progress_bar.set(min(max(current / total, 0), 1))
+
+
 class SettingsDialog(ctk.CTkToplevel):
     """Settings dialog for Google Keep connection and app settings"""
     
@@ -5757,6 +5941,50 @@ for you to authorize the app."""
                 json.dump(data, f, indent=2)
             messagebox.showinfo("Export Complete", f"Exported {len(notes)} notes to {filepath}")
 
+    def _run_import_with_progress(
+        self,
+        title: str,
+        source_name: str,
+        import_func: Callable[[MultiSourceImporter], List[Note]],
+        empty_message: str,
+    ):
+        progress_dialog = ImportProgressDialog(self, title)
+
+        def progress(message: str, current: int, total: int):
+            self.after(0, lambda: progress_dialog.set_progress(message, current, total))
+
+        def complete(notes: List[Note]):
+            progress_dialog.destroy()
+            if not notes:
+                messagebox.showerror("No Notes Found", empty_message)
+                return
+            statuses = [self._save_imported_note_status(note) for note in notes]
+            self._show_import_summary(source_name, statuses)
+
+        def failed(message: str):
+            progress_dialog.destroy()
+            messagebox.showerror("Import Failed", message)
+
+        def cancelled():
+            progress_dialog.destroy()
+            messagebox.showinfo("Import Cancelled", "Import cancelled before all files were processed.")
+
+        def worker():
+            try:
+                importer = MultiSourceImporter(
+                    self.db,
+                    progress_callback=progress,
+                    cancel_check=progress_dialog.is_cancelled,
+                )
+                notes = import_func(importer)
+                self.after(0, lambda: complete(notes))
+            except ImportCancelled:
+                self.after(0, cancelled)
+            except Exception as e:
+                self.after(0, lambda message=str(e): failed(message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _import_external_source(self):
         """Import notes from another note app export."""
         source_type = self.external_source_var.get()
@@ -5779,13 +6007,13 @@ for you to authorize the app."""
         if not selected:
             return
 
-        try:
-            importer = MultiSourceImporter(self.db)
-            notes = importer.import_external(source_type, Path(selected))
-            statuses = [self._save_imported_note_status(note) for note in notes]
-            self._show_import_summary(source_type, statuses)
-        except Exception as e:
-            messagebox.showerror("Import Failed", str(e))
+        selected_path = Path(selected)
+        self._run_import_with_progress(
+            f"Importing {source_type}",
+            source_type,
+            lambda importer: importer.import_external(source_type, selected_path),
+            f"No notes were found in the selected {source_type} export.",
+        )
     
     def _import_notes(self):
         """Import notes from JSON"""
@@ -5973,21 +6201,15 @@ for you to authorize the app."""
             return
         
         folder_path = Path(folder)
-        importer = MultiSourceImporter(self.db)
-        notes = importer.import_takeout_folder(folder_path)
-
-        if not notes:
-            messagebox.showerror(
-                "No Notes Found",
-                "No JSON files found in the selected folder.\n\n"
-                "Make sure you:\n"
-                "1. Extracted the ZIP file from Google Takeout\n"
-                "2. Selected the 'Keep' folder inside"
-            )
-            return
-
-        statuses = [self._save_imported_note_status(note) for note in notes]
-        self._show_import_summary("Google Takeout", statuses)
+        self._run_import_with_progress(
+            "Importing Google Takeout",
+            "Google Takeout",
+            lambda importer: importer.import_takeout_path(folder_path),
+            "No JSON files found in the selected folder.\n\n"
+            "Make sure you:\n"
+            "1. Extracted the ZIP file from Google Takeout\n"
+            "2. Selected the 'Keep' folder or the Takeout ZIP",
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

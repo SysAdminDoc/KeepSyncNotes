@@ -95,6 +95,47 @@ class MultiSourceImporterTests(unittest.TestCase):
         self.assertTrue(notes[0].pinned)
         self.assertIn("keep-label", notes[0].labels)
 
+    def test_rejects_zip_path_traversal(self):
+        export_path = self.root / "traversal.zip"
+        with zipfile.ZipFile(export_path, "w") as zf:
+            zf.writestr("../escape.md", "bad")
+
+        with self.assertRaises(app.ImportSafetyError):
+            self.importer.import_text_zip(export_path, "Obsidian", markdown_default=True)
+
+    def test_text_zip_uses_extension_allowlist(self):
+        export_path = self.root / "mixed.zip"
+        with zipfile.ZipFile(export_path, "w") as zf:
+            zf.writestr("Plan.md", "# Plan\nBody")
+            zf.writestr("payload.exe", "not a note")
+
+        notes = self.importer.import_text_zip(export_path, "Obsidian", markdown_default=True)
+
+        self.assertEqual([note.title for note in notes], ["Plan"])
+
+    def test_rejects_zip_uncompressed_size_limit(self):
+        original_limit = app.MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES
+        app.MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES = 8
+        try:
+            export_path = self.root / "large.zip"
+            with zipfile.ZipFile(export_path, "w") as zf:
+                zf.writestr("large.md", "x" * 32)
+
+            with self.assertRaises(app.ImportSafetyError):
+                self.importer.import_text_zip(export_path, "Obsidian", markdown_default=True)
+        finally:
+            app.MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES = original_limit
+
+    def test_cancelled_import_stops_before_zip_processing(self):
+        export_path = self.root / "cancel.zip"
+        with zipfile.ZipFile(export_path, "w") as zf:
+            zf.writestr("Takeout/Keep/keep-note.json", json.dumps({"title": "Cancelled"}))
+
+        importer = app.MultiSourceImporter(self.db, cancel_check=lambda: True)
+
+        with self.assertRaises(app.ImportCancelled):
+            importer.import_takeout_zip(export_path)
+
     def test_import_conflict_copy_marks_duplicate(self):
         local = app.Note(id="local", title="Same title", content="Local body")
         incoming = app.Note(id="incoming", title="Same title", content="Imported body")

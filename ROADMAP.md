@@ -79,7 +79,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ## Research-Driven Additions
 
 ### P0 - Correctness, Security, and Packaging
-- **Guard ZIP and bulk imports** - enforce archive member count, total uncompressed size, path traversal checks, extension allowlists, and progress cancellation before extraction. Evidence: `keepsync_notes.py:1585`, Python ZIP decompression-pitfall guidance.
 
 ### P1 - Data Safety and Maintainability
 - **Add versioned local backup and restore before import/sync** - create restorable snapshots before Takeout import, multi-source import, Drive sync, and GitHub sync; expose a restore flow in-app.

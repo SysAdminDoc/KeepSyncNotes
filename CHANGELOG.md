@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.15.0] - 2026-06-28
+
+- Added ZIP import safety guards for member counts, uncompressed size, path traversal, and extension allowlists.
+- Replaced Takeout ZIP `extractall` with per-member safe extraction.
+- Added cancellable progress handling for manual Takeout and external-source imports.
+
 ## [v1.14.0] - 2026-06-28
 
 - Added pinned `requirements.txt` for deterministic dependency installation.
