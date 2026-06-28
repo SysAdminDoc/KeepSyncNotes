@@ -15,126 +15,8 @@ Features:
 """
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# AUTO-INSTALLER - Installs all required dependencies before running
+# Dependencies are managed by requirements.txt; the app never installs packages at runtime.
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def install_dependencies():
-    """
-    Automatically install all required dependencies.
-    Runs once at startup before any imports.
-    """
-    import subprocess
-    import sys
-    
-    # Define all required packages
-    REQUIRED_PACKAGES = {
-        # Package name: (import name, description, required)
-        "customtkinter": ("customtkinter", "Modern UI framework", True),
-        "Pillow": ("PIL", "Image processing", True),
-        "requests": ("requests", "HTTP library", True),
-        "gkeepapi": ("gkeepapi", "Google Keep sync", False),  # Optional
-        "gpsoauth": ("gpsoauth", "Google auth tokens", False),  # Optional, for token generation
-        "browser-cookie3": ("browser_cookie3", "Browser cookie extraction", False),  # Optional
-        "plyer": ("plyer", "Desktop notifications", False),  # Optional
-        "keyring": ("keyring", "OS credential storage", True),
-        "PyGithub": ("github", "GitHub API client", False),  # Optional, for GitHub sync
-        "google-api-python-client": ("googleapiclient", "Google API client", False),  # Optional, for Drive sync
-        "google-auth-oauthlib": ("google_auth_oauthlib", "Google OAuth", False),  # Optional, for Drive sync
-    }
-    
-    # Check for tkinter (system package, can't pip install)
-    try:
-        import tkinter
-    except ImportError:
-        print("=" * 60)
-        print("ERROR: tkinter is not installed!")
-        print("=" * 60)
-        print()
-        print("tkinter is a system package and must be installed via your")
-        print("system package manager, not pip.")
-        print()
-        print("Install tkinter:")
-        print("  Ubuntu/Debian:  sudo apt install python3-tk")
-        print("  Fedora:         sudo dnf install python3-tkinter")
-        print("  Arch:           sudo pacman -S tk")
-        print("  macOS:          brew install python-tk")
-        print("  Windows:        Reinstall Python with 'tcl/tk' option checked")
-        print()
-        sys.exit(1)
-    
-    missing_required = []
-    missing_optional = []
-    
-    # Check which packages need installation
-    for package, (import_name, description, required) in REQUIRED_PACKAGES.items():
-        try:
-            __import__(import_name)
-        except ImportError:
-            if required:
-                missing_required.append((package, description))
-            else:
-                missing_optional.append((package, description))
-    
-    # Install missing packages
-    if missing_required or missing_optional:
-        print("=" * 60)
-        print("KeepSync Notes - Dependency Installer")
-        print("=" * 60)
-        print()
-        
-        all_missing = missing_required + missing_optional
-        
-        if missing_required:
-            print(f"Required packages to install: {len(missing_required)}")
-            for pkg, desc in missing_required:
-                print(f"  - {pkg} - {desc}")
-        
-        if missing_optional:
-            print(f"Optional packages to install: {len(missing_optional)}")
-            for pkg, desc in missing_optional:
-                print(f"  - {pkg} - {desc}")
-        
-        print()
-        print("Installing packages...")
-        print()
-        
-        for package, description in all_missing:
-            print(f"Installing {package}...", end=" ", flush=True)
-            try:
-                # Try standard install first
-                result = subprocess.run(
-                    [sys.executable, "-m", "pip", "install", package, "-q"],
-                    capture_output=True,
-                    text=True
-                )
-                
-                # If failed, try with --break-system-packages (for externally managed envs)
-                if result.returncode != 0:
-                    result = subprocess.run(
-                        [sys.executable, "-m", "pip", "install", package, 
-                         "--break-system-packages", "-q"],
-                        capture_output=True,
-                        text=True
-                    )
-                
-                if result.returncode == 0:
-                    print("OK")
-                else:
-                    print("FAILED")
-                    if package in [p for p, _ in missing_required]:
-                        print(f"  Error: {result.stderr.strip()}")
-                        
-            except Exception as e:
-                print(f"FAILED ({e})")
-        
-        print()
-        print("=" * 60)
-        print("Installation complete! Starting application...")
-        print("=" * 60)
-        print()
-
-# Run installer before any imports
-install_dependencies()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # IMPORTS
@@ -195,7 +77,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.14.0"
 DB_VERSION = 1
 KEYRING_SERVICE = "KeepSyncNotes"
 KEEP_MASTER_TOKEN_CREDENTIAL = "google_keep_master_token"
@@ -1813,7 +1695,7 @@ class KeepSyncEngine:
     def login(self, email: str, master_token: str = None, password: str = None) -> tuple[bool, str]:
         """Authenticate with Google Keep using the new API"""
         if not GKEEPAPI_AVAILABLE:
-            return False, "gkeepapi not installed. Install with: pip install gkeepapi"
+            return False, "gkeepapi is not installed. Run: python -m pip install -r requirements.txt"
         
         try:
             # Use the new authenticate() method
@@ -2182,16 +2064,9 @@ def get_master_token_cli():
     try:
         import gpsoauth
     except ImportError:
-        print("Installing gpsoauth...")
-        import subprocess
-        import sys
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "gpsoauth", "--break-system-packages", "-q"],
-            capture_output=True
-        )
-        if result.returncode != 0:
-            subprocess.run([sys.executable, "-m", "pip", "install", "gpsoauth", "-q"])
-        import gpsoauth
+        print("ERROR: gpsoauth is not installed.")
+        print("Run: python -m pip install -r requirements.txt")
+        return None
     
     email = input("Enter your Google email: ").strip()
     
@@ -2256,8 +2131,8 @@ def get_master_token_cli():
     except Exception as e:
         print(f"ERROR: {e}")
         print()
-        print("If you're seeing SSL or connection errors, try:")
-        print("  pip install --upgrade gpsoauth requests")
+        print("If you're seeing dependency errors, run:")
+        print("  python -m pip install -r requirements.txt")
         return None
 
 
@@ -2274,21 +2149,13 @@ def extract_token_from_browser():
     print("Make sure you're logged into Google Keep in Chrome or Firefox.")
     print()
     
-    # Try to install browser_cookie3
+    # Import browser_cookie3 if the deterministic environment includes it.
     try:
         import browser_cookie3
     except ImportError:
-        print("Installing browser_cookie3...")
-        import subprocess
-        import sys
-        subprocess.run([sys.executable, "-m", "pip", "install", "browser_cookie3", 
-                       "--break-system-packages", "-q"], capture_output=True)
-        try:
-            import browser_cookie3
-        except ImportError:
-            print("ERROR: Could not install browser_cookie3")
-            print("Try: pip install browser_cookie3")
-            return None
+        print("ERROR: browser-cookie3 is not installed.")
+        print("Run: python -m pip install -r requirements.txt")
+        return None
     
     print("Checking browsers for Google cookies...")
     print()
@@ -2374,23 +2241,7 @@ class KeepWebScraper:
         try:
             import browser_cookie3
         except ImportError:
-            # Install browser_cookie3
-            import subprocess
-            import sys
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "browser_cookie3", "-q"],
-                capture_output=True
-            )
-            if result.returncode != 0:
-                subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "browser_cookie3", 
-                     "--break-system-packages", "-q"],
-                    capture_output=True
-                )
-            try:
-                import browser_cookie3
-            except ImportError:
-                return False, "Could not install browser_cookie3"
+            return False, "browser-cookie3 is not installed. Run: python -m pip install -r requirements.txt"
         
         import requests
         
@@ -2637,7 +2488,6 @@ class GoogleDriveSync(CloudSyncProvider):
             token_path: Path to store/load the user's auth token
         """
         try:
-            # Install required packages
             try:
                 from google.oauth2.credentials import Credentials
                 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -2645,18 +2495,7 @@ class GoogleDriveSync(CloudSyncProvider):
                 from googleapiclient.discovery import build
                 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
             except ImportError:
-                import subprocess
-                import sys
-                subprocess.run([
-                    sys.executable, "-m", "pip", "install", 
-                    "google-auth", "google-auth-oauthlib", "google-api-python-client",
-                    "--break-system-packages", "-q"
-                ], capture_output=True)
-                
-                from google.oauth2.credentials import Credentials
-                from google_auth_oauthlib.flow import InstalledAppFlow
-                from google.auth.transport.requests import Request
-                from googleapiclient.discovery import build
+                return False, "Google Drive dependencies are not installed. Run: python -m pip install -r requirements.txt"
             
             # Default paths
             if not token_path:
@@ -2873,17 +2712,10 @@ class GitHubSync(CloudSyncProvider):
             create_if_missing: Create repo if it doesn't exist
         """
         try:
-            # Install PyGithub if needed
             try:
                 from github import Github, GithubException
             except ImportError:
-                import subprocess
-                import sys
-                subprocess.run([
-                    sys.executable, "-m", "pip", "install", "PyGithub",
-                    "--break-system-packages", "-q"
-                ], capture_output=True)
-                from github import Github, GithubException
+                return False, "PyGithub is not installed. Run: python -m pip install -r requirements.txt"
             
             token = token or migrate_setting_secret(self.db, "github_token", GITHUB_PAT_CREDENTIAL)
             if not token:
@@ -5035,29 +4867,19 @@ class TokenGeneratorDialog(ctk.CTkToplevel):
             return
         
         self.generate_btn.configure(state="disabled", text="Generating...")
-        self.status_label.configure(text="Installing gpsoauth if needed...", text_color=COLORS["text_muted"])
+        self.status_label.configure(text="Checking gpsoauth...", text_color=COLORS["text_muted"])
         self.update()
         
         # Run in thread to not block UI
         def generate():
             try:
-                # Install gpsoauth if needed
                 try:
                     import gpsoauth
                 except ImportError:
-                    import subprocess
-                    import sys
-                    result = subprocess.run(
-                        [sys.executable, "-m", "pip", "install", "gpsoauth", "-q"],
-                        capture_output=True
-                    )
-                    if result.returncode != 0:
-                        subprocess.run(
-                            [sys.executable, "-m", "pip", "install", "gpsoauth", 
-                             "--break-system-packages", "-q"],
-                            capture_output=True
-                        )
-                    import gpsoauth
+                    self.after(0, lambda: self._show_error(
+                        "gpsoauth is not installed. Run: python -m pip install -r requirements.txt"
+                    ))
+                    return
                 
                 self.after(0, lambda: self.status_label.configure(
                     text="Authenticating with Google...", text_color=COLORS["text_muted"]))

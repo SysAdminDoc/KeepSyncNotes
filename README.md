@@ -1,20 +1,22 @@
 # KeepSyncNotes
 
-![Version](https://img.shields.io/badge/version-1.13.0-blue)
+![Version](https://img.shields.io/badge/version-1.14.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Language](https://img.shields.io/badge/language-Python-3776AB)
 ![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
-![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 
 A Google Keep importer and note management desktop app. Import your entire Google Keep library from a Takeout export, then browse, search, tag, and manage your notes locally with a dark-themed CustomTkinter interface and no cloud dependency.
 
 ## Quick Start
 
-```bash
-python keepsync_notes.py
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python keepsync_notes.py
 ```
 
-Dependencies auto-install on first run. No manual `pip install` needed.
+Dependencies are pinned in `requirements.txt`; the app never installs packages at runtime.
 
 ## Features
 
@@ -29,6 +31,7 @@ Dependencies auto-install on first run. No manual `pip install` needed.
 - **Sharing Metadata** — Preserve imported "shared with" collaborator metadata without re-sharing notes
 - **Attachments** — Copy imported Keep media locally and show image thumbnails inline
 - **OS Keyring Credentials** — Keep, Google Drive, and GitHub sync secrets are stored in the platform credential store with legacy plaintext cleanup
+- **Deterministic Dependencies** — Pinned requirements file with no startup or runtime package installation
 - **Markdown Preview** — Notes tagged `.md` can switch between editable source and rendered preview
 - **Ranked Full-Text Search** — SQLite FTS5 search across titles, bodies, checklist items, and labels
 - **Advanced Filters** — Combine label, color, date range, image, checklist, and archive filters with AND/OR logic
@@ -58,7 +61,8 @@ Right-click any note for options: Edit, Archive, Delete, or copy text to clipboa
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
+- `python -m pip install -r requirements.txt`
 - Windows / macOS / Linux
 
 ## License

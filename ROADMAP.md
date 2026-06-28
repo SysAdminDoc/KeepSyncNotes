@@ -79,7 +79,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ## Research-Driven Additions
 
 ### P0 - Correctness, Security, and Packaging
-- **Replace runtime dependency installation with deterministic packaging** - add explicit dependency files and remove startup/import-time pip installation. Evidence: tests triggered optional package installation; `keepsync_notes.py:21` and `keepsync_notes.py:104` run installers.
 - **Guard ZIP and bulk imports** - enforce archive member count, total uncompressed size, path traversal checks, extension allowlists, and progress cancellation before extraction. Evidence: `keepsync_notes.py:1585`, Python ZIP decompression-pitfall guidance.
 
 ### P1 - Data Safety and Maintainability

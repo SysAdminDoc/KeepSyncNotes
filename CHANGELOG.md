@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.14.0] - 2026-06-28
+
+- Added pinned `requirements.txt` for deterministic dependency installation.
+- Removed startup and feature-level runtime package installation paths.
+- Updated setup docs and tests to guard against reintroducing runtime installers.
+
 ## [v1.13.0] - 2026-06-28
 
 - Moved Keep master tokens, Google Drive OAuth tokens, and GitHub PATs into the OS keyring.
