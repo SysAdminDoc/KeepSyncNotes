@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.18.0] - 2026-06-28
+
+- Added three-way cloud sync planning for Google Drive and GitHub using per-note base hashes.
+- Reported dry-run create, update, delete, and conflict counts before applying cloud sync changes.
+- Preserved remote conflict copies locally when both sides changed or first-run shared notes diverged.
+
 ## [v1.17.0] - 2026-06-28
 
 - Added a file-backed diagnostics manager with unhandled exception and thread crash hooks.

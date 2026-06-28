@@ -79,7 +79,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.17.0"
+APP_VERSION = "1.18.0"
 DB_VERSION = 1
 KEYRING_SERVICE = "KeepSyncNotes"
 KEEP_MASTER_TOKEN_CREDENTIAL = "google_keep_master_token"
@@ -1083,6 +1083,85 @@ def merge_note_conflict(local_note: Note, imported_note: Note) -> Note:
         ).strip()
     merged.checklist_items = []
     return merged
+
+def note_data_hash(data: Dict[str, Any]) -> str:
+    try:
+        note = Note.from_dict(data)
+        return note.content_hash
+    except Exception:
+        comparable = {key: value for key, value in data.items() if key not in {"local_modified", "remote_modified", "sync_status"}}
+        return hashlib.md5(json.dumps(comparable, sort_keys=True, default=str).encode()).hexdigest()
+
+def build_cloud_sync_plan(
+    local_notes: List[Note],
+    remote_notes: Dict[str, Dict[str, Any]],
+    base_versions: Dict[str, str],
+) -> Dict[str, List[Any]]:
+    plan = {
+        "download_creates": [],
+        "download_updates": [],
+        "upload_creates": [],
+        "upload_updates": [],
+        "conflicts": [],
+        "delete_local": [],
+        "delete_remote": [],
+    }
+    local_by_id = {note.id: note for note in local_notes}
+    for note_id in sorted(set(local_by_id) | set(remote_notes)):
+        local_note = local_by_id.get(note_id)
+        remote_data = remote_notes.get(note_id)
+        base_hash = base_versions.get(note_id)
+        local_hash = local_note.content_hash if local_note else None
+        remote_hash = note_data_hash(remote_data) if remote_data else None
+
+        if local_note and not remote_data:
+            if base_hash and local_hash == base_hash:
+                plan["delete_local"].append(local_note)
+            else:
+                plan["upload_creates"].append(local_note)
+            continue
+        if remote_data and not local_note:
+            if base_hash and remote_hash == base_hash:
+                plan["delete_remote"].append(remote_data)
+            else:
+                plan["download_creates"].append(remote_data)
+            continue
+        if not local_note or not remote_data or local_hash == remote_hash:
+            continue
+
+        local_changed = bool(local_hash and local_hash != base_hash)
+        remote_changed = bool(remote_hash and remote_hash != base_hash)
+        if not base_hash and local_hash != remote_hash:
+            plan["conflicts"].append((local_note, remote_data))
+        elif base_hash and local_changed and remote_changed:
+            plan["conflicts"].append((local_note, remote_data))
+        elif remote_changed and not local_changed:
+            plan["download_updates"].append(remote_data)
+        else:
+            plan["upload_updates"].append(local_note)
+    return plan
+
+def cloud_plan_counts(plan: Dict[str, List[Any]]) -> Dict[str, int]:
+    return {
+        "create": len(plan["download_creates"]) + len(plan["upload_creates"]),
+        "update": len(plan["download_updates"]) + len(plan["upload_updates"]),
+        "delete": len(plan["delete_local"]) + len(plan["delete_remote"]),
+        "conflict": len(plan["conflicts"]),
+    }
+
+def save_cloud_conflict_copy(db: "DatabaseManager", remote_data: Dict[str, Any], provider: str) -> Optional[Note]:
+    note = Note.from_dict(remote_data)
+    note.id = str(uuid.uuid4())
+    note.title = f"{note.title or 'Untitled'} ({provider} conflict)"
+    note.labels = normalize_import_labels(note.labels + ["cloud-conflict", f"{provider.lower()}-conflict"])
+    note.sync_status = SyncStatus.CONFLICT
+    note.keep_id = None
+    if db.save_note(note):
+        return note
+    return None
+
+def cloud_base_versions(notes: List[Note]) -> Dict[str, str]:
+    return {note.id: note.content_hash for note in notes}
 
 def default_advanced_filters() -> Dict[str, Any]:
     return {
@@ -2935,7 +3014,7 @@ class GoogleDriveSync(CloudSyncProvider):
         if not self.is_connected or not self.service:
             return False, "Not connected to Google Drive", {}
         
-        stats = {"uploaded": 0, "downloaded": 0, "conflicts": 0}
+        stats = {"uploaded": 0, "downloaded": 0, "conflicts": 0, "deleted": 0}
         
         try:
             self._notify("syncing", "Syncing with Google Drive...")
@@ -2957,11 +3036,11 @@ class GoogleDriveSync(CloudSyncProvider):
             ).execute()
             
             remote_files = results.get('files', [])
+            remote_notes = {}
             
             if remote_files:
                 # Download and merge with remote
                 file_id = remote_files[0]['id']
-                remote_modified = remote_files[0].get('modifiedTime')
                 
                 # Download remote file
                 import io
@@ -2976,18 +3055,39 @@ class GoogleDriveSync(CloudSyncProvider):
                 
                 fh.seek(0)
                 remote_data = json.loads(fh.read().decode('utf-8'))
-                
-                # Merge: remote notes that don't exist locally
-                local_ids = {n.id for n in local_notes}
-                for remote_note in remote_data.get("notes", []):
-                    if remote_note["id"] not in local_ids:
-                        note = Note.from_dict(remote_note)
-                        self.db.save_note(note)
-                        stats["downloaded"] += 1
-                
-                # Update the file with merged data
-                local_notes = self.db.get_all_notes(include_archived=True, include_trashed=False)
-                local_data["notes"] = [n.to_dict() for n in local_notes]
+                remote_notes = {
+                    note["id"]: note for note in remote_data.get("notes", [])
+                    if isinstance(note, dict) and note.get("id")
+                }
+
+            base_versions = self.db.get_setting("cloud_base_gdrive", {})
+            if not isinstance(base_versions, dict):
+                base_versions = {}
+            plan = build_cloud_sync_plan(local_notes, remote_notes, base_versions)
+            dry_run = cloud_plan_counts(plan)
+            stats["dry_run"] = dry_run
+            log_diagnostic_event("info", f"Google Drive sync plan: {dry_run}")
+            self._notify(
+                "syncing",
+                f"Drive plan c{dry_run['create']} u{dry_run['update']} d{dry_run['delete']} x{dry_run['conflict']}"
+            )
+
+            for local_note in plan["delete_local"]:
+                if self.db.delete_note(local_note.id):
+                    stats["deleted"] += 1
+
+            for remote_note in plan["download_creates"] + plan["download_updates"]:
+                self.db.save_note(Note.from_dict(remote_note))
+                stats["downloaded"] += 1
+
+            for _local_note, remote_note in plan["conflicts"]:
+                if save_cloud_conflict_copy(self.db, remote_note, "Drive"):
+                    stats["conflicts"] += 1
+
+            stats["deleted"] += len(plan["delete_remote"])
+            stats["uploaded"] = len(plan["upload_creates"]) + len(plan["upload_updates"])
+            local_notes = self.db.get_all_notes(include_archived=True, include_trashed=False)
+            local_data["notes"] = [n.to_dict() for n in local_notes]
             
             # Upload merged data
             import tempfile
@@ -3017,15 +3117,16 @@ class GoogleDriveSync(CloudSyncProvider):
                 ).execute()
             
             os.unlink(temp_path)
-            stats["uploaded"] = len(local_notes)
             
             self.last_sync = datetime.now(timezone.utc)
             self.db.set_setting("gdrive_last_sync", self.last_sync.isoformat())
+            self.db.set_setting("cloud_base_gdrive", cloud_base_versions(local_notes))
             
             self._notify("synced", f"Drive sync: ↑{stats['uploaded']} ↓{stats['downloaded']}")
             return True, "Sync completed", stats
             
         except Exception as e:
+            log_diagnostic_exception("Google Drive sync", e)
             self._notify("error", f"Sync error: {str(e)}")
             return False, f"Sync error: {str(e)}", stats
 
@@ -3137,7 +3238,7 @@ class GitHubSync(CloudSyncProvider):
         if not self.is_connected or not self.repo:
             return False, "Not connected to GitHub", {}
         
-        stats = {"uploaded": 0, "downloaded": 0, "conflicts": 0}
+        stats = {"uploaded": 0, "downloaded": 0, "conflicts": 0, "deleted": 0}
         
         try:
             from github import GithubException
@@ -3146,7 +3247,6 @@ class GitHubSync(CloudSyncProvider):
             
             # Get local notes
             local_notes = self.db.get_all_notes(include_archived=True, include_trashed=False)
-            local_notes_dict = {n.id: n for n in local_notes}
             
             # Get remote notes
             remote_notes = {}
@@ -3159,35 +3259,72 @@ class GitHubSync(CloudSyncProvider):
             except GithubException as e:
                 if e.status != 404:  # 404 means folder doesn't exist yet
                     raise
-            
-            # Download new remote notes
-            for note_id, (note_data, sha) in remote_notes.items():
-                if note_id not in local_notes_dict:
-                    note = Note.from_dict(note_data)
-                    self.db.save_note(note)
-                    stats["downloaded"] += 1
-            
-            # Upload local notes
+            remote_note_data = {note_id: note_data for note_id, (note_data, _sha) in remote_notes.items()}
+            base_versions = self.db.get_setting("cloud_base_github", {})
+            if not isinstance(base_versions, dict):
+                base_versions = {}
+            plan = build_cloud_sync_plan(local_notes, remote_note_data, base_versions)
+            dry_run = cloud_plan_counts(plan)
+            stats["dry_run"] = dry_run
+            log_diagnostic_event("info", f"GitHub sync plan: {dry_run}")
+            self._notify(
+                "syncing",
+                f"GitHub plan c{dry_run['create']} u{dry_run['update']} d{dry_run['delete']} x{dry_run['conflict']}"
+            )
+
+            for local_note in plan["delete_local"]:
+                if self.db.delete_note(local_note.id):
+                    stats["deleted"] += 1
+
+            for remote_note in plan["download_creates"] + plan["download_updates"]:
+                self.db.save_note(Note.from_dict(remote_note))
+                stats["downloaded"] += 1
+
+            conflict_local_ids = set()
+            conflict_copy_ids = set()
+            for local_note, remote_note in plan["conflicts"]:
+                conflict_copy = save_cloud_conflict_copy(self.db, remote_note, "GitHub")
+                if conflict_copy:
+                    stats["conflicts"] += 1
+                    conflict_local_ids.add(local_note.id)
+                    conflict_copy_ids.add(conflict_copy.id)
+
+            upload_create_ids = {note.id for note in plan["upload_creates"]} | conflict_copy_ids
+            upload_update_ids = {note.id for note in plan["upload_updates"]} | conflict_local_ids
+            local_notes = self.db.get_all_notes(include_archived=True, include_trashed=False)
+
+            for remote_note in plan["delete_remote"]:
+                note_id = remote_note["id"]
+                if note_id in remote_notes:
+                    _, sha = remote_notes[note_id]
+                    self.repo.delete_file(
+                        f"{self.NOTES_DIR}/{note_id}.json",
+                        f"Delete note: {remote_note.get('title', 'Untitled')[:50]}",
+                        sha
+                    )
+                    stats["deleted"] += 1
+
+            # Upload local note changes
             for note in local_notes:
                 note_filename = f"{self.NOTES_DIR}/{note.id}.json"
                 note_content = json.dumps(note.to_dict(), indent=2)
                 
                 try:
                     if note.id in remote_notes:
+                        if note.id not in upload_update_ids:
+                            continue
                         # Update existing
                         _, sha = remote_notes[note.id]
-                        remote_data = remote_notes[note.id][0]
-                        
-                        # Only update if local is newer
-                        if note.updated_at.isoformat() > remote_data.get('updated_at', ''):
-                            self.repo.update_file(
-                                note_filename,
-                                f"Update note: {note.title[:50]}",
-                                note_content,
-                                sha
-                            )
-                            stats["uploaded"] += 1
+                        self.repo.update_file(
+                            note_filename,
+                            f"Update note: {note.title[:50]}",
+                            note_content,
+                            sha
+                        )
+                        stats["uploaded"] += 1
                     else:
+                        if note.id not in upload_create_ids:
+                            continue
                         # Create new
                         self.repo.create_file(
                             note_filename,
@@ -3243,11 +3380,13 @@ class GitHubSync(CloudSyncProvider):
             
             self.last_sync = datetime.now(timezone.utc)
             self.db.set_setting("github_last_sync", self.last_sync.isoformat())
+            self.db.set_setting("cloud_base_github", cloud_base_versions(local_notes))
             
             self._notify("synced", f"GitHub sync: ↑{stats['uploaded']} ↓{stats['downloaded']}")
             return True, "Sync completed", stats
             
         except Exception as e:
+            log_diagnostic_exception("GitHub sync", e)
             self._notify("error", f"Sync error: {str(e)}")
             return False, f"Sync error: {str(e)}", stats
 

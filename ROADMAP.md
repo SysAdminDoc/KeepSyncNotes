@@ -81,7 +81,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ### P0 - Correctness, Security, and Packaging
 
 ### P1 - Data Safety and Maintainability
-- **Define cloud sync conflict semantics with dry-run diffs** - each provider should report create/update/delete/conflict counts before applying changes, keep a base version, and write conflict copies when both sides change.
 - **Split the monolith into testable modules** - extract models, storage, importers, sync providers, UI dialogs, and packaging/bootstrap code from `keepsync_notes.py` before adding larger sync or export features.
 - **Add import fidelity reports** - after each import, show counts for notes, checklists, attachments, labels, reminders, archived/trashed state, shared metadata, unsupported fields, skipped files, and conflicts.
 - **Replace destructive confirmation dialogs with undoable status workflows** - convert delete/permanent-delete operations to status/toast plus undo or restore history where practical.
