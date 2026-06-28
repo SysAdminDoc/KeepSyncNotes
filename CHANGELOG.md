@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.23.0] - 2026-06-28
+
+- Moved the `Label` data model into `keepsync_models.py` with the other note data classes.
+- Removed the remaining dataclass dependency from `keepsync_notes.py`.
+- Added regression coverage for label round-tripping and app compatibility re-export.
+
 ## [v1.22.0] - 2026-06-28
 
 - Extracted local database and attachment backup/restore logic into `keepsync_backups.py`.

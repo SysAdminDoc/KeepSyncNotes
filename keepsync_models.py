@@ -273,3 +273,23 @@ class Note:
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(timezone.utc),
             updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else datetime.now(timezone.utc),
         )
+
+
+@dataclass
+class Label:
+    id: str
+    name: str
+    color: str = ""
+    keep_id: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "name": self.name, "color": self.color, "keep_id": self.keep_id}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Label":
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            color=data.get("color", ""),
+            keep_id=data.get("keep_id"),
+        )

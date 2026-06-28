@@ -11,6 +11,7 @@ class ModelsModuleTests(unittest.TestCase):
         self.assertIs(app.SyncStatus, models.SyncStatus)
         self.assertIs(app.ChecklistItem, models.ChecklistItem)
         self.assertIs(app.Attachment, models.Attachment)
+        self.assertIs(app.Label, models.Label)
 
     def test_note_roundtrip_normalizes_core_fields(self):
         note = models.Note(
@@ -38,6 +39,11 @@ class ModelsModuleTests(unittest.TestCase):
         self.assertEqual(models.keep_color_name("dark_blue"), "Dark blue")
         self.assertEqual(models.keep_color_hex("missing"), "#1e293b")
         self.assertEqual(models.sanitize_filename("../bad:name?.txt"), "bad_name_.txt")
+
+    def test_label_roundtrip(self):
+        label = models.Label(id="label-1", name="Work", color="blue", keep_id="keep-label")
+
+        self.assertEqual(models.Label.from_dict(label.to_dict()), label)
 
 
 if __name__ == "__main__":

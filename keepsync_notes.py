@@ -46,7 +46,6 @@ from html.parser import HTMLParser
 from html import unescape
 from datetime import datetime, timezone
 from pathlib import Path
-from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Callable
 import webbrowser
 import uuid
@@ -56,6 +55,7 @@ from keepsync_models import (
     ChecklistItem,
     KEEP_COLOR_ALIASES,
     KEEP_COLOR_PALETTE,
+    Label,
     Note,
     NoteType,
     SyncStatus,
@@ -117,7 +117,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.22.0"
+APP_VERSION = "1.23.0"
 DB_VERSION = 1
 KEYRING_SERVICE = "KeepSyncNotes"
 KEEP_MASTER_TOKEN_CREDENTIAL = "google_keep_master_token"
@@ -825,25 +825,6 @@ def note_matches_advanced_filters(note: Note, filters: Dict[str, Any]) -> bool:
     if str(filters.get("mode", "AND")).upper() == "OR":
         return any(checks)
     return all(checks)
-
-@dataclass
-class Label:
-    id: str
-    name: str
-    color: str = ""
-    keep_id: Optional[str] = None
-    
-    def to_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "color": self.color, "keep_id": self.keep_id}
-    
-    @classmethod
-    def from_dict(cls, data: dict) -> "Label":
-        return cls(
-            id=data["id"],
-            name=data["name"],
-            color=data.get("color", ""),
-            keep_id=data.get("keep_id")
-        )
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATABASE MANAGER
