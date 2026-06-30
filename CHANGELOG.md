@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.30.0] - 2026-06-30
+
+- Added import fidelity reports covering note outcomes, checklists, attachments, labels, reminders, archived/trashed state, sharing metadata, conflicts, and unsupported fields.
+- Preserved conflict replace/merge outcomes in foreground import summaries without changing save behavior.
+- Added direct import report coverage and app compatibility re-export checks.
+
 ## [v1.29.0] - 2026-06-30
 
 - Added `keepsync_paths.py` for predictable platform app data directories with legacy `~/.keepsync_notes` preservation.
