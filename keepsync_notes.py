@@ -42,6 +42,15 @@ from keepsync_diagnostics import (
     log_diagnostic_exception,
     set_diagnostics_manager,
 )
+from keepsync_folders import (
+    FOLDER_SEPARATOR,
+    folder_display_name,
+    folder_path_depth,
+    folder_paths_from_label,
+    folder_paths_from_labels,
+    normalize_folder_path,
+    note_matches_folder,
+)
 from keepsync_import_reports import IMPORT_SUCCESS_STATUSES, import_summary_lines
 from keepsync_import_safety import (
     MAX_IMPORT_FOLDER_BYTES,

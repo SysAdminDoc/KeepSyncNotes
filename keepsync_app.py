@@ -21,6 +21,13 @@ from keepsync_diagnostics import (
     log_diagnostic_exception,
     set_diagnostics_manager,
 )
+from keepsync_folders import (
+    folder_display_name,
+    folder_path_depth,
+    folder_paths_from_labels,
+    normalize_folder_path,
+    note_matches_folder,
+)
 from keepsync_import_reports import IMPORT_SUCCESS_STATUSES, import_summary_lines
 from keepsync_importers import MultiSourceImporter
 from keepsync_import_safety import (
@@ -224,6 +231,37 @@ class KeepSyncNotesApp(ctk.CTk):
             btn.pack(fill="x", pady=2)
             self.nav_buttons[key] = btn
 
+        # Folders section
+        folders_header = ctk.CTkFrame(sidebar, fg_color="transparent")
+        folders_header.pack(fill="x", padx=16, pady=(20, 8))
+
+        ctk.CTkLabel(
+            folders_header,
+            text="FOLDERS",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=COLORS["text_muted"]
+        ).pack(side="left")
+
+        add_folder_btn = ctk.CTkButton(
+            folders_header,
+            text="+",
+            width=24,
+            height=24,
+            font=ctk.CTkFont(size=14),
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_muted"],
+            command=self._add_folder_dialog
+        )
+        add_folder_btn.pack(side="right")
+
+        self.folders_frame = ctk.CTkScrollableFrame(
+            sidebar,
+            fg_color="transparent",
+            height=150
+        )
+        self.folders_frame.pack(fill="x", padx=8)
+
         # Labels section
         labels_header = ctk.CTkFrame(sidebar, fg_color="transparent")
         labels_header.pack(fill="x", padx=16, pady=(20, 8))
@@ -320,6 +358,7 @@ class KeepSyncNotesApp(ctk.CTk):
 
         # Set initial nav state
         self._update_nav_state()
+        self._refresh_folders()
         self._refresh_labels()
         self._refresh_saved_searches()
 
@@ -454,6 +493,7 @@ class KeepSyncNotesApp(ctk.CTk):
         """Set the current filter and refresh notes"""
         self.current_filter = filter_key
         self._update_nav_state()
+        self._refresh_folders()
         self._refresh_saved_searches()
         self._refresh_notes_list()
 
@@ -491,6 +531,13 @@ class KeepSyncNotesApp(ctk.CTk):
         elif self.current_filter.startswith("label:"):
             label = self.current_filter[6:]
             notes = self.db.get_notes_by_label(label)
+        elif self.current_filter.startswith("folder:"):
+            folder_path = self.current_filter[7:]
+            notes = [
+                note
+                for note in self.db.get_all_notes(include_archived=include_archived)
+                if note_matches_folder(note, folder_path)
+            ]
         elif self.current_filter.startswith("saved:") and self.search_query:
             notes = self.db.search_notes(self.search_query, include_archived=include_archived)
             used_indexed_search = True
@@ -535,6 +582,36 @@ class KeepSyncNotesApp(ctk.CTk):
             card.pack(fill="x", pady=4, padx=4)
             self.note_cards.append(card)
 
+    def _refresh_folders(self):
+        """Refresh the hierarchical folders list in the sidebar."""
+        if not hasattr(self, "folders_frame"):
+            return
+        for widget in self.folders_frame.winfo_children():
+            widget.destroy()
+
+        labels = [label.name for label in self.db.get_all_labels()]
+        explicit_folders = self.db.get_setting("folders", [])
+        if not isinstance(explicit_folders, list):
+            explicit_folders = []
+
+        for folder_path in folder_paths_from_labels(labels, explicit_folders):
+            depth = folder_path_depth(folder_path)
+            text = f"{'  ' * depth}{folder_display_name(folder_path)}"
+            filter_key = f"folder:{folder_path}"
+            btn = ctk.CTkButton(
+                self.folders_frame,
+                text=text,
+                image=IconManager.get_icon("archive", 16, COLORS["accent_blue"]),
+                font=ctk.CTkFont(size=12),
+                height=34,
+                fg_color=COLORS["bg_light"] if self.current_filter == filter_key else "transparent",
+                hover_color=COLORS["bg_hover"],
+                text_color=COLORS["text_primary"] if self.current_filter == filter_key else COLORS["text_secondary"],
+                anchor="w",
+                command=lambda path=folder_path: self._set_filter(f"folder:{path}")
+            )
+            btn.pack(fill="x", pady=1)
+
     def _refresh_labels(self):
         """Refresh the labels list in sidebar"""
         for widget in self.labels_frame.winfo_children():
@@ -555,6 +632,7 @@ class KeepSyncNotesApp(ctk.CTk):
                 command=lambda l=label.name: self._set_filter(f"label:{l}")
             )
             btn.pack(fill="x", pady=1)
+        self._refresh_folders()
 
     def _refresh_saved_searches(self):
         if not hasattr(self, "saved_searches_frame"):
@@ -617,16 +695,23 @@ class KeepSyncNotesApp(ctk.CTk):
         self.advanced_filters = dict(default_advanced_filters())
         self.advanced_filters.update(saved.get("filters") or {})
         self._update_nav_state()
+        self._refresh_folders()
         self._refresh_saved_searches()
         self._refresh_notes_list()
 
     def _update_filter_summary(self):
         if not hasattr(self, "filter_summary_label"):
             return
+        parts = []
+        if self.current_filter.startswith("folder:"):
+            parts.append(f"folder:{self.current_filter[7:]}")
         if not advanced_filters_active(self.advanced_filters):
+            if parts:
+                self.filter_summary_label.configure(text=" | ".join(parts[:4]), text_color=COLORS["accent_blue"])
+                return
             self.filter_summary_label.configure(text="No filters", text_color=COLORS["text_muted"])
             return
-        parts = [self.advanced_filters.get("mode", "AND")]
+        parts.insert(0, self.advanced_filters.get("mode", "AND"))
         if self.advanced_filters.get("label"):
             parts.append(f"label:{self.advanced_filters['label']}")
         if self.advanced_filters.get("color"):
@@ -729,6 +814,23 @@ class KeepSyncNotesApp(ctk.CTk):
             label = Label(id=str(uuid.uuid4()), name=label_name)
             self.db.save_label(label)
             self._refresh_labels()
+
+    def _add_folder_dialog(self):
+        """Show dialog to add a folder path."""
+        dialog = ctk.CTkInputDialog(
+            text="Enter folder path:",
+            title="New Folder"
+        )
+        folder_path = normalize_folder_path(dialog.get_input())
+        if not folder_path:
+            return
+        folders = self.db.get_setting("folders", [])
+        if not isinstance(folders, list):
+            folders = []
+        if folder_path not in folders:
+            folders.append(folder_path)
+            self.db.set_setting("folders", folder_paths_from_labels([], folders))
+        self._refresh_folders()
 
     def _manual_sync(self):
         """Trigger manual sync"""

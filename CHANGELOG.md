@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.41.0] - 2026-06-30
+
+- Added a hierarchical Folders sidebar backed by explicit folder paths and slash-delimited labels.
+- Added folder filtering that includes notes in child folder paths.
+- Added folder helper and app-shell filtering tests.
+
 ## [v1.40.0] - 2026-06-30
 
 - Extracted app metadata, Google Keep sync/auth helpers, and the main app shell into dedicated modules.

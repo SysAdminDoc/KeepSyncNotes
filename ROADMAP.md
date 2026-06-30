@@ -9,7 +9,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ### Import & Sync
 
 ### Search & Organization
-- **Folders on top of labels** — hierarchical organization Keep doesn't offer
 - **Tag graph** — visualize notes by shared labels
 
 ### Editor
