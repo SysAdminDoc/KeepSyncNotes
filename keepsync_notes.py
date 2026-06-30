@@ -128,6 +128,14 @@ from keepsync_paths import (
 )
 from keepsync_settings_dialog import SettingsDialog
 from keepsync_storage import DatabaseManager
+from keepsync_tag_graph import (
+    TagEdge,
+    TagGraph,
+    TagNode,
+    build_tag_graph,
+    normalized_note_labels,
+    tag_graph_summary_lines,
+)
 from keepsync_theme import COLORS
 from keepsync_ui_components import (
     IconManager,

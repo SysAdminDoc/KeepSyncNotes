@@ -9,7 +9,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ### Import & Sync
 
 ### Search & Organization
-- **Tag graph** — visualize notes by shared labels
 
 ### Editor
 - **Rich-text / Markdown hybrid** — inline formatting toolbar, markdown shortcuts (`**bold**`)

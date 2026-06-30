@@ -52,6 +52,7 @@ from keepsync_note_ops import (
 from keepsync_paths import get_app_data_dir
 from keepsync_settings_dialog import SettingsDialog
 from keepsync_storage import DatabaseManager
+from keepsync_tag_graph import build_tag_graph, tag_graph_summary_lines
 from keepsync_theme import COLORS
 from keepsync_ui_components import IconManager, NoteCard
 from keepsync_ui_dialogs import (
@@ -60,6 +61,7 @@ from keepsync_ui_dialogs import (
     TakeoutInstructionsDialog,
     TokenGeneratorDialog,
 )
+from keepsync_ui_modal import configure_modal_dialog
 
 try:
     from plyer import notification as desktop_notification
@@ -230,6 +232,20 @@ class KeepSyncNotesApp(ctk.CTk):
             )
             btn.pack(fill="x", pady=2)
             self.nav_buttons[key] = btn
+
+        tag_graph_btn = ctk.CTkButton(
+            nav_frame,
+            text="Tag Graph",
+            image=IconManager.get_icon("label", 18, COLORS["accent_purple"]),
+            font=ctk.CTkFont(size=13),
+            height=40,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_secondary"],
+            anchor="w",
+            command=self._open_tag_graph
+        )
+        tag_graph_btn.pack(fill="x", pady=2)
 
         # Folders section
         folders_header = ctk.CTkFrame(sidebar, fg_color="transparent")
@@ -661,6 +677,48 @@ class KeepSyncNotesApp(ctk.CTk):
 
     def _open_advanced_filters(self):
         AdvancedFilterDialog(self, self.advanced_filters, self._apply_advanced_filters)
+
+    def _open_tag_graph(self):
+        graph = build_tag_graph(self.db.get_all_notes(include_archived=True))
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Tag Graph")
+        dialog.geometry("520x560")
+        dialog.configure(fg_color=COLORS["bg_dark"])
+
+        frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(
+            frame,
+            text="Tag Graph",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", pady=(0, 12))
+
+        text_box = ctk.CTkTextbox(
+            frame,
+            font=ctk.CTkFont(size=13),
+            fg_color=COLORS["bg_medium"],
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            wrap="word"
+        )
+        text_box.pack(fill="both", expand=True)
+        text_box.insert("1.0", "\n".join(tag_graph_summary_lines(graph)))
+        text_box.configure(state="disabled")
+
+        close_btn = ctk.CTkButton(
+            frame,
+            text="Close",
+            height=36,
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_hover"],
+            text_color=COLORS["bg_darkest"],
+            command=dialog.destroy
+        )
+        close_btn.pack(anchor="e", pady=(12, 0))
+        configure_modal_dialog(dialog, self, initial_focus=close_btn)
 
     def _apply_advanced_filters(self, filters: Dict[str, Any]):
         self.advanced_filters = dict(default_advanced_filters())

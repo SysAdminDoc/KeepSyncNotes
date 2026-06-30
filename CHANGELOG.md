@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.42.0] - 2026-06-30
+
+- Added a tag graph builder for label co-occurrence nodes and shared-label edges.
+- Added a Tag Graph sidebar action with a modal graph summary.
+- Added tag graph helper compatibility coverage.
+
 ## [v1.41.0] - 2026-06-30
 
 - Added a hierarchical Folders sidebar backed by explicit folder paths and slash-delimited labels.
