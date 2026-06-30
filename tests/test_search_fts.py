@@ -3,12 +3,13 @@ import unittest
 from pathlib import Path
 
 import keepsync_notes as app
+import keepsync_storage as storage
 
 
 class SearchFtsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.db = app.DatabaseManager(str(Path(self.tmp.name) / "notes.db"))
+        self.db = storage.DatabaseManager(str(Path(self.tmp.name) / "notes.db"))
 
     def tearDown(self):
         self.db.close()
@@ -27,6 +28,9 @@ class SearchFtsTests(unittest.TestCase):
 
         self.assertEqual([note.id for note in content_results], ["alpha"])
         self.assertEqual([note.id for note in label_results], ["alpha"])
+
+    def test_app_reexports_storage_api_for_compatibility(self):
+        self.assertIs(app.DatabaseManager, storage.DatabaseManager)
 
     def test_search_indexes_checklist_items(self):
         self.db.save_note(app.Note(

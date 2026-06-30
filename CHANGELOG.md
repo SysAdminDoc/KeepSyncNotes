@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.28.0] - 2026-06-30
+
+- Extracted SQLite note, label, settings, sync-log, FTS, and import-conflict persistence into `keepsync_storage.py`.
+- Preserved `DatabaseManager` as an app-level compatibility import for existing callers.
+- Updated FTS storage coverage to instantiate the extracted storage module directly.
+
 ## [v1.27.0] - 2026-06-30
 
 - Extracted multi-source importers, Takeout attachment parsing, and HTML/ENEX/text parsing helpers into `keepsync_importers.py`.
