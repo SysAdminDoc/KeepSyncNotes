@@ -20,6 +20,7 @@ from keepsync_models import (
     clamp_checklist_indent,
     normalize_keep_color,
 )
+from keepsync_markdown_editing import format_markdown_selection
 from keepsync_note_text import (
     format_reminder_datetime,
     markdown_preview_blocks,
@@ -206,6 +207,22 @@ class NoteEditor(ctk.CTkFrame):
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color=COLORS["accent_cyan"]
         ).pack(side="left", padx=(0, 10))
+
+        self.markdown_toolbar = ctk.CTkFrame(self.markdown_controls, fg_color="transparent")
+        self.markdown_toolbar.pack(side="left")
+        for label, style in (("B", "bold"), ("I", "italic"), ("Code", "code"), ("Link", "link"), ("Task", "task")):
+            button = ctk.CTkButton(
+                self.markdown_toolbar,
+                text=label,
+                width=48 if len(label) > 1 else 30,
+                height=28,
+                font=ctk.CTkFont(size=11, weight="bold" if style == "bold" else "normal"),
+                fg_color=COLORS["bg_medium"],
+                hover_color=COLORS["bg_hover"],
+                text_color=COLORS["text_primary"],
+                command=lambda item=style: self._apply_markdown_format(item)
+            )
+            button.pack(side="left", padx=(0, 4))
 
         self.markdown_toggle = ctk.CTkSegmentedButton(
             self.markdown_controls,
@@ -477,6 +494,39 @@ class NoteEditor(ctk.CTkFrame):
     def _on_modify(self, event=None):
         """Mark note as modified"""
         self.is_modified = True
+
+    def _content_text_widget(self):
+        return getattr(self.content_text, "_textbox", self.content_text)
+
+    def _apply_markdown_format(self, style: str):
+        """Apply markdown formatting to the current selection or insert placeholder text."""
+        if self.markdown_mode_var.get() == "Preview":
+            self.markdown_mode_var.set("Edit")
+            self._refresh_markdown_controls()
+
+        widget = self._content_text_widget()
+        try:
+            start = widget.index("sel.first")
+            end = widget.index("sel.last")
+            selected = widget.get(start, end)
+        except Exception:
+            start = widget.index("insert")
+            end = start
+            selected = ""
+
+        replacement = format_markdown_selection(selected, style)
+        if selected:
+            widget.delete(start, end)
+        widget.insert(start, replacement)
+        try:
+            widget.tag_remove("sel", "1.0", "end")
+            widget.tag_add("sel", start, f"{start}+{len(replacement)}c")
+            widget.mark_set("insert", f"{start}+{len(replacement)}c")
+        except Exception:
+            pass
+        self._on_modify()
+        if self.markdown_mode_var.get() == "Preview":
+            self._render_markdown_preview()
 
     def _markdown_preview_widget(self):
         return getattr(self.markdown_preview, "_textbox", self.markdown_preview)

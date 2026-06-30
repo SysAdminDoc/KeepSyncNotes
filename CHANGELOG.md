@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.43.0] - 2026-06-30
+
+- Added a Markdown formatting toolbar for `.md` notes with bold, italic, code, link, and task controls.
+- Added pure Markdown selection formatting helpers for editor toolbar coverage.
+- Kept rendered Markdown preview behavior unchanged.
+
 ## [v1.42.0] - 2026-06-30
 
 - Added a tag graph builder for label co-occurrence nodes and shared-label edges.
