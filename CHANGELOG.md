@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.39.0] - 2026-06-30
+
+- Extracted the note editor panel into `keepsync_note_editor.py`.
+- Moved reminder parsing and markdown preview helpers into `keepsync_note_text.py`.
+- Added module-boundary tests for editor and text-helper compatibility exports.
+
 ## [v1.38.0] - 2026-06-30
 
 - Extracted reusable note card, sync badge, and icon components into `keepsync_ui_components.py`.
