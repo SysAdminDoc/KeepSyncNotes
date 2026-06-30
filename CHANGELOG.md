@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.37.0] - 2026-06-30
+
+- Extracted CLI/bootstrap dispatch into `keepsync_bootstrap.py`.
+- Kept `keepsync_notes.main()` as a thin app-specific wiring function.
+- Added bootstrap tests that cover help, token, and GUI-launch paths without starting the GUI.
+
 ## [v1.36.0] - 2026-06-30
 
 - Extracted `SettingsDialog` and its settings-backed import/export workflows into `keepsync_settings_dialog.py`.

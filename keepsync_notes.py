@@ -57,6 +57,7 @@ from keepsync_models import (
     normalize_people,
     sanitize_filename,
 )
+from keepsync_bootstrap import run_bootstrap
 from keepsync_cloud_plan import (
     build_cloud_sync_plan,
     cloud_base_versions,
@@ -169,7 +170,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.36.0"
+APP_VERSION = "1.37.0"
 DB_VERSION = 1
 
 def parse_reminder_datetime(value: str) -> Optional[datetime]:
@@ -3497,35 +3498,19 @@ class KeepSyncNotesApp(ctk.CTk):
 # ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def main():
+def main(argv=None):
     """Main entry point"""
     import sys
-    
-    # Handle command-line arguments
-    if len(sys.argv) > 1:
-        if sys.argv[1] in ("--get-token", "-t", "--token"):
-            get_master_token_cli()
-            return
-        elif sys.argv[1] in ("--help", "-h"):
-            print(f"{APP_NAME} v{APP_VERSION}")
-            print()
-            print("Usage: python keep_sync_notes.py [OPTIONS]")
-            print()
-            print("Options:")
-            print("  --get-token, -t  Generate a Google Master Token for Keep sync")
-            print("  --help, -h       Show this help message")
-            print()
-            print("Run without arguments to start the application.")
-            return
-    
-    # Set appearance mode
-    ctk.set_appearance_mode("dark")
-    ctk.set_default_color_theme("blue")
-    
-    # Create and run app
-    app = KeepSyncNotesApp()
-    app.protocol("WM_DELETE_WINDOW", app.on_closing)
-    app.mainloop()
+
+    return run_bootstrap(
+        sys.argv if argv is None else argv,
+        app_factory=KeepSyncNotesApp,
+        token_cli=get_master_token_cli,
+        app_name=APP_NAME,
+        app_version=APP_VERSION,
+        set_appearance_mode=ctk.set_appearance_mode,
+        set_default_color_theme=ctk.set_default_color_theme,
+    )
 
 
 if __name__ == "__main__":

@@ -81,4 +81,4 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ### P0 - Correctness, Security, and Packaging
 
 ### P1 - Data Safety and Maintainability
-- **Finish splitting the monolith into testable modules** - extract remaining main-window composition and packaging/bootstrap code from `keepsync_notes.py` before adding larger sync or export features.
+- **Finish splitting the monolith into testable modules** - extract remaining main-window composition from `keepsync_notes.py` before adding larger sync or export features.
