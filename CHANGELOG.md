@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.34.0] - 2026-06-30
+
+- Extracted Google Drive/GitHub cloud sync providers and `CloudSyncManager` into `keepsync_cloud_sync.py`.
+- Passed app/database metadata into cloud sync providers without importing the app module.
+- Added cloud sync module coverage and app compatibility re-export checks.
+
 ## [v1.33.0] - 2026-06-30
 
 - Added `keepsync_ui_modal.py` to centralize modal focus, Escape handling, close behavior, and focus return.
