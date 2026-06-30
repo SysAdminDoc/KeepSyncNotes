@@ -13,11 +13,16 @@ from keepsync_app import (
 from keepsync_app_info import APP_NAME, APP_VERSION, DB_VERSION
 from keepsync_attachment_editing import (
     IMAGE_FILETYPES,
+    ImageAttachmentBatchResult,
+    copy_image_attachments,
     copy_image_attachment,
+    is_supported_image_path,
     note_attachment_dir,
+    parse_drop_file_paths,
     save_clipboard_image_attachment,
     unique_attachment_path,
 )
+from keepsync_dragdrop import drop_copy_action, enable_file_drop
 from keepsync_backups import LocalBackupManager
 from keepsync_bootstrap import run_bootstrap
 from keepsync_cloud_plan import (

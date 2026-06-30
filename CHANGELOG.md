@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.45.0] - 2026-06-30
+
+- Added native editor image file drag/drop through a pinned TkDND bridge.
+- Added dropped-file parsing and batch attachment copying with skipped/failed-file reporting.
+- Added attachment drop helper coverage for mixed image and non-image drops.
+
 ## [v1.44.0] - 2026-06-30
 
 - Added editor controls to add image files and paste clipboard images into the local attachment store.

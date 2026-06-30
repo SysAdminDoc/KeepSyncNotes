@@ -12,9 +12,12 @@ from PIL import Image, ImageGrab
 
 from keepsync_attachment_editing import (
     IMAGE_FILETYPES,
+    copy_image_attachments,
     copy_image_attachment,
+    parse_drop_file_paths,
     save_clipboard_image_attachment,
 )
+from keepsync_dragdrop import drop_copy_action, enable_file_drop
 from keepsync_models import (
     Attachment,
     ChecklistItem,
@@ -51,6 +54,8 @@ class NoteEditor(ctk.CTkFrame):
         self.current_note: Optional[Note] = None
         self.is_modified = False
         self.selected_color = ""
+        self._image_drop_enabled = False
+        self._image_drop_target_ids = set()
 
         self._build_ui()
 
@@ -436,6 +441,18 @@ class NoteEditor(ctk.CTkFrame):
         self.attachments_frame = ctk.CTkFrame(attachments_section, fg_color="transparent")
         self.attachments_frame.pack(fill="x", pady=(4, 0))
         self.attachment_images = []
+        self._register_image_drop_targets(
+            self,
+            editor_frame,
+            self.content_container,
+            self.text_frame,
+            self.content_text,
+            self._content_text_widget(),
+            self.checklist_frame,
+            attachments_section,
+            attachments_header,
+            self.attachments_frame,
+        )
 
         # Advanced options (collapsible)
         self.advanced_frame = ctk.CTkFrame(editor_frame, fg_color="transparent")
@@ -528,6 +545,28 @@ class NoteEditor(ctk.CTkFrame):
     def _on_modify(self, event=None):
         """Mark note as modified"""
         self.is_modified = True
+
+    def _register_image_drop_targets(self, *widgets):
+        """Register widgets as native file drop targets when the optional bridge is available."""
+        for widget in widgets:
+            if not widget:
+                continue
+            target_id = str(widget)
+            if target_id in self._image_drop_target_ids:
+                continue
+            if enable_file_drop(widget, self._handle_image_drop):
+                self._image_drop_target_ids.add(target_id)
+                self._image_drop_enabled = True
+
+    def _register_image_drop_tree(self, widget):
+        """Register a widget and its current children as image drop targets."""
+        self._register_image_drop_targets(widget)
+        try:
+            children = widget.winfo_children()
+        except Exception:
+            return
+        for child in children:
+            self._register_image_drop_tree(child)
 
     def _content_text_widget(self):
         return getattr(self.content_text, "_textbox", self.content_text)
@@ -682,11 +721,12 @@ class NoteEditor(ctk.CTkFrame):
         if not attachments:
             ctk.CTkLabel(
                 self.attachments_frame,
-                text="No attachments",
+                text="No attachments - drop images here or use Add/Paste",
                 font=ctk.CTkFont(size=12),
                 text_color=COLORS["text_muted"],
                 anchor="w"
             ).pack(anchor="w")
+            self._register_image_drop_tree(self.attachments_frame)
             return
 
         for attachment in attachments:
@@ -736,6 +776,8 @@ class NoteEditor(ctk.CTkFrame):
             )
             open_btn.pack(side="right", padx=8)
 
+        self._register_image_drop_tree(self.attachments_frame)
+
     def _open_attachment(self, attachment: Attachment):
         """Open an attachment with the system default handler."""
         target = attachment.stored_path
@@ -784,6 +826,40 @@ class NoteEditor(ctk.CTkFrame):
         self.current_note.attachments.append(attachment)
         self._load_attachments(self.current_note.attachments)
         self._on_modify()
+
+    def _handle_image_drop(self, event):
+        """Copy dropped image files into the note attachment store."""
+        if not self.current_note:
+            return drop_copy_action()
+
+        paths = parse_drop_file_paths(getattr(event, "data", ""), splitlist=self.tk.splitlist)
+        if not paths:
+            messagebox.showinfo("No Image", "Drop image files to attach them.")
+            return drop_copy_action()
+
+        result = copy_image_attachments(paths, self.db.db_path, self.current_note.id)
+        if result.attachments:
+            self.current_note.attachments.extend(result.attachments)
+            self._load_attachments(self.current_note.attachments)
+            self._on_modify()
+
+        if result.failed_paths and not result.attachments:
+            first_path, first_error = result.failed_paths[0]
+            messagebox.showerror(
+                "Drop Image Failed",
+                f"No images were attached.\n{first_path.name}: {first_error}"
+            )
+        elif not result.attachments:
+            messagebox.showinfo("No Image", "Drop image files to attach them.")
+        elif result.skipped_paths or result.failed_paths:
+            lines = [f"Attached {len(result.attachments)} image file(s)."]
+            if result.skipped_paths:
+                lines.append(f"Skipped {len(result.skipped_paths)} non-image file(s).")
+            if result.failed_paths:
+                lines.append(f"Failed {len(result.failed_paths)} image file(s).")
+            messagebox.showwarning("Some Files Skipped", "\n".join(lines))
+
+        return drop_copy_action()
 
     def _on_type_change(self):
         """Switch between text and checklist editor"""
