@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.32.0] - 2026-06-30
+
+- Documented official Google Keep API support as Workspace-admin/domain-wide-delegation focused rather than a safe default for personal desktop sync.
+- Kept Takeout as the default import path and Drive/GitHub as practical user-controlled sync/backup targets.
+- Removed the completed official Keep API evaluation item from the roadmap.
+
 ## [v1.31.0] - 2026-06-30
 
 - Replaced note delete confirmation dialogs with a status-bar Undo workflow for trash moves.

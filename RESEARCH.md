@@ -33,6 +33,12 @@ KeepSyncNotes is a local-first Python/CustomTkinter desktop note manager centere
 - Tests cover import adapters, markdown helpers, advanced filters, and FTS, but not UI flow, credential migration, ZIP guardrails, cloud sync conflict cases, backup/restore, saved-search behavior, or packaging.
 - Documentation still says dependencies auto-install on first run, while memory/stack conventions require normal `requirements.txt`/venv setup; roadmap should drive packaging cleanup rather than adding more runtime installers.
 
+## Official Google Keep API Evaluation - 2026-06-30
+- Google documents the official Keep API as a REST API for enterprise administrators managing Keep notes, including note create/list/delete, attachment download, and permission mutation. The documented use case is enterprise governance/CASB remediation, not personal desktop note sync.
+- The REST reference exposes `v1.notes` create/delete/get/list, `v1.media.download`, and `v1.notes.permissions` batch permission methods. It is useful for Workspace-admin workflows, but it does not remove the product risk of presenting live Keep sync as a normal consumer-account feature.
+- Google documents authorization through domain-wide delegation with a service account or OAuth client ID for enterprise apps. That requires Workspace administrator approval and domain-level trust, so it is not a good default for personal Gmail users.
+- Decision: keep Takeout import as the default safe path, keep Google Drive/GitHub as practical user-controlled sync/backup targets, and treat an official Keep API connector as a future optional Workspace-only feature if a real admin-backed use case appears.
+
 ## Rejected Ideas
 - Full collaborative multi-user editing: Obsidian/Joplin/Standard Notes prove it is valuable, but it conflicts with this app's local archive/migration shape until conflict/version history exists.
 - First-class plugin ecosystem: Joplin shows plugin value, but the current monolith lacks stable internal APIs; revisit after module boundaries are real.
@@ -47,6 +53,7 @@ Project:
 Keep / Keep-specific OSS:
 - https://support.google.com/keep/answer/2888240
 - https://support.google.com/accounts/answer/3024190
+- https://developers.google.com/workspace/keep/api/guides
 - https://developers.google.com/workspace/keep/api/reference/rest
 - https://github.com/djsudduth/keep-it-markdown
 - https://github.com/kiwiz/gkeepapi

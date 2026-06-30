@@ -152,7 +152,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.31.0"
+APP_VERSION = "1.32.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)

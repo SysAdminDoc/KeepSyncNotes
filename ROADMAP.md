@@ -85,6 +85,3 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 
 ### P2 - Platform Quality
 - **Add accessible modal focus management** - align dialogs with WAI-ARIA modal expectations where Tk allows it: initial focus, trapped tab order, Escape behavior, close control, and focus return.
-
-### P3 - Strategic Evaluation
-- **Evaluate official Google Keep API support for Workspace accounts** - document whether read/write integration can use the official API for eligible accounts while preserving Takeout as the default safe import path.
