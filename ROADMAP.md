@@ -82,6 +82,3 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 
 ### P1 - Data Safety and Maintainability
 - **Split the monolith into testable modules** - extract models, storage, importers, sync providers, UI dialogs, and packaging/bootstrap code from `keepsync_notes.py` before adding larger sync or export features.
-
-### P2 - Platform Quality
-- **Add accessible modal focus management** - align dialogs with WAI-ARIA modal expectations where Tk allows it: initial focus, trapped tab order, Escape behavior, close control, and focus return.

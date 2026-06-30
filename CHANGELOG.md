@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.33.0] - 2026-06-30
+
+- Added `keepsync_ui_modal.py` to centralize modal focus, Escape handling, close behavior, and focus return.
+- Applied the modal helper to settings, diagnostics, import progress, conflict, Takeout instructions, token generation, advanced filter, and browser import progress dialogs.
+- Added helper-level modal focus regression tests.
+
 ## [v1.32.0] - 2026-06-30
 
 - Documented official Google Keep API support as Workspace-admin/domain-wide-delegation focused rather than a safe default for personal desktop sync.

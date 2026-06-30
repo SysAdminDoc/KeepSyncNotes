@@ -132,6 +132,7 @@ from keepsync_paths import (
     get_google_drive_credentials_path,
     get_google_drive_token_path,
 )
+from keepsync_ui_modal import configure_modal_dialog
 
 # Optional: gkeepapi for Google Keep sync
 try:
@@ -152,7 +153,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.32.0"
+APP_VERSION = "1.33.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -3141,6 +3142,7 @@ class AdvancedFilterDialog(ctk.CTkToplevel):
         self.transient(parent)
         self.grab_set()
         self._build_ui()
+        configure_modal_dialog(self, parent, initial_focus=self.label_entry)
 
     def _build_ui(self):
         frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -3275,6 +3277,7 @@ class ImportConflictDialog(ctk.CTkToplevel):
         self.grab_set()
 
         self._build_ui()
+        configure_modal_dialog(self, parent)
         self.wait_window()
 
     def _build_ui(self):
@@ -3350,6 +3353,7 @@ class TakeoutInstructionsDialog(ctk.CTkToplevel):
         self.grab_set()
         
         self._build_ui()
+        configure_modal_dialog(self, parent)
     
     def _build_ui(self):
         # Header
@@ -3463,6 +3467,7 @@ class TokenGeneratorDialog(ctk.CTkToplevel):
         
         self.parent_dialog = parent
         self._build_ui(prefill_email)
+        configure_modal_dialog(self, parent, initial_focus=self.email_entry)
     
     def _build_ui(self, prefill_email: str):
         # Header
@@ -3746,6 +3751,7 @@ class ImportProgressDialog(ctk.CTkToplevel):
             command=self.cancel,
         )
         self.cancel_btn.pack(anchor="e", padx=20)
+        configure_modal_dialog(self, parent, initial_focus=self.cancel_btn, on_close=self.cancel, escape_handler=self.cancel)
 
     def cancel(self):
         self.cancelled = True
@@ -3807,6 +3813,7 @@ class DiagnosticsDialog(ctk.CTkToplevel):
         )
         self.textbox.pack(fill="both", expand=True, padx=16, pady=(0, 16))
         self._refresh()
+        configure_modal_dialog(self, parent, initial_focus=self.textbox)
 
     def _refresh(self):
         self.textbox.delete("1.0", "end")
@@ -3840,6 +3847,7 @@ class SettingsDialog(ctk.CTkToplevel):
         
         self._build_ui()
         self._load_settings()
+        configure_modal_dialog(self, parent, initial_focus=self.tabview)
     
     def _build_ui(self):
         # Create tabview for different settings sections
@@ -4910,6 +4918,7 @@ for you to authorize the app."""
         progress_bar = ctk.CTkProgressBar(progress_dialog, mode="indeterminate")
         progress_bar.pack(fill="x", padx=40)
         progress_bar.start()
+        configure_modal_dialog(progress_dialog, self, initial_focus=progress_dialog)
         
         def do_import():
             scraper = KeepWebScraper()
