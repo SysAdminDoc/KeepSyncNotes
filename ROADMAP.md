@@ -11,7 +11,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ### Search & Organization
 
 ### Editor
-- **Global hotkey** — `Ctrl+Alt+N` from anywhere to pop a quick-note capture window
 
 ### Export & Portability
 - **Export all to Markdown vault** — Obsidian-compatible `notes/YYYY-MM-DD-title.md` with YAML frontmatter
