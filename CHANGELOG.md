@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.46.0] - 2026-06-30
+
+- Added inline voice-note recording that saves mono WAV attachments from the editor.
+- Added local Whisper transcription via a lazy-loaded `faster-whisper` worker and appends transcripts into notes.
+- Added audio recording helper coverage for WAV output, fake recorder streams, transcription, and transcript formatting.
+
 ## [v1.45.0] - 2026-06-30
 
 - Added native editor image file drag/drop through a pinned TkDND bridge.

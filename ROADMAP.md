@@ -11,7 +11,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ### Search & Organization
 
 ### Editor
-- **Audio recording inline** — record voice notes via `sounddevice`, transcribe via local Whisper
 - **Global hotkey** — `Ctrl+Alt+N` from anywhere to pop a quick-note capture window
 
 ### Export & Portability

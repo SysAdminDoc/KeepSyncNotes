@@ -1,6 +1,8 @@
 customtkinter==5.2.2
 tkinterdnd2==0.5.0
 Pillow==12.2.0
+sounddevice==0.5.5
+faster-whisper==1.2.1
 requests==2.34.2
 gkeepapi==0.17.1
 gpsoauth==2.0.0

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox
 from typing import Any, Callable, List, Optional
+import threading
 import uuid
 import webbrowser
 
@@ -16,6 +17,13 @@ from keepsync_attachment_editing import (
     copy_image_attachment,
     parse_drop_file_paths,
     save_clipboard_image_attachment,
+)
+from keepsync_audio_recording import (
+    AudioRecorder,
+    AudioRecordingError,
+    AudioTranscriptionError,
+    append_audio_transcript,
+    transcribe_audio_file,
 )
 from keepsync_dragdrop import drop_copy_action, enable_file_drop
 from keepsync_models import (
@@ -56,6 +64,7 @@ class NoteEditor(ctk.CTkFrame):
         self.selected_color = ""
         self._image_drop_enabled = False
         self._image_drop_target_ids = set()
+        self.audio_recorder: Optional[AudioRecorder] = None
 
         self._build_ui()
 
@@ -437,6 +446,28 @@ class NoteEditor(ctk.CTkFrame):
             command=self._paste_image_attachment
         )
         self.paste_image_btn.pack(side="right")
+
+        self.record_audio_btn = ctk.CTkButton(
+            attachments_header,
+            text="Record Audio",
+            font=ctk.CTkFont(size=12),
+            width=104,
+            height=28,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["accent_cyan"],
+            command=self._toggle_audio_recording
+        )
+        self.record_audio_btn.pack(side="right", padx=(0, 8))
+
+        self.audio_status_label = ctk.CTkLabel(
+            attachments_section,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color=COLORS["text_muted"],
+            anchor="w"
+        )
+        self.audio_status_label.pack(fill="x", pady=(4, 0))
 
         self.attachments_frame = ctk.CTkFrame(attachments_section, fg_color="transparent")
         self.attachments_frame.pack(fill="x", pady=(4, 0))
@@ -861,6 +892,104 @@ class NoteEditor(ctk.CTkFrame):
 
         return drop_copy_action()
 
+    def _toggle_audio_recording(self):
+        """Start or stop inline voice note recording."""
+        if self.audio_recorder and self.audio_recorder.is_recording:
+            self._stop_audio_recording()
+        else:
+            self._start_audio_recording()
+
+    def _start_audio_recording(self):
+        if not self.current_note:
+            return
+        try:
+            self.audio_recorder = AudioRecorder()
+            self.audio_recorder.start()
+        except AudioRecordingError as e:
+            self.audio_recorder = None
+            messagebox.showerror("Audio Recording Failed", str(e))
+            return
+
+        self.record_audio_btn.configure(
+            text="Stop Audio",
+            fg_color=COLORS["accent_red"],
+            hover_color=COLORS["accent_red"],
+            text_color=COLORS["text_primary"],
+        )
+        self._set_audio_status("Recording voice note...")
+
+    def _stop_audio_recording(self):
+        if not self.current_note or not self.audio_recorder:
+            return
+        recorder = self.audio_recorder
+        self.audio_recorder = None
+        try:
+            attachment = recorder.stop_to_attachment(self.db.db_path, self.current_note.id)
+        except AudioRecordingError as e:
+            self._reset_audio_record_button()
+            messagebox.showerror("Audio Recording Failed", str(e))
+            return
+
+        self._reset_audio_record_button()
+        self.current_note.attachments.append(attachment)
+        self._load_attachments(self.current_note.attachments)
+        self._on_modify()
+        self._set_audio_status("Audio saved. Transcribing...")
+        self._transcribe_audio_attachment(attachment)
+
+    def _reset_audio_record_button(self):
+        self.record_audio_btn.configure(
+            text="Record Audio",
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["accent_cyan"],
+        )
+
+    def _set_audio_status(self, text: str, error: bool = False):
+        self.audio_status_label.configure(
+            text=text,
+            text_color=COLORS["accent_red"] if error else COLORS["text_muted"],
+        )
+
+    def _transcribe_audio_attachment(self, attachment: Attachment):
+        thread = threading.Thread(
+            target=self._transcribe_audio_worker,
+            args=(attachment,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _transcribe_audio_worker(self, attachment: Attachment):
+        try:
+            transcript = transcribe_audio_file(Path(attachment.stored_path))
+        except AudioTranscriptionError as e:
+            self._after_safe(lambda: self._set_audio_status(str(e), error=True))
+            return
+        self._after_safe(lambda: self._apply_audio_transcript(transcript))
+
+    def _after_safe(self, callback: Callable):
+        try:
+            self.after(0, callback)
+        except Exception:
+            pass
+
+    def _apply_audio_transcript(self, transcript: str):
+        text = transcript.strip()
+        if not text:
+            self._set_audio_status("Audio saved. No speech detected.")
+            return
+
+        if self.note_type_var.get() == "checklist":
+            self._add_checklist_item(f"Audio transcript: {text}", focus=False)
+        else:
+            updated = append_audio_transcript(self.content_text.get("1.0", "end-1c"), text)
+            self.content_text.delete("1.0", "end")
+            self.content_text.insert("1.0", updated)
+            if self.markdown_mode_var.get() == "Preview":
+                self._render_markdown_preview()
+            self._on_modify()
+        self._set_audio_status("Audio transcribed into the note.")
+
     def _on_type_change(self):
         """Switch between text and checklist editor"""
         if self.note_type_var.get() == "checklist":
@@ -1185,6 +1314,9 @@ class NoteEditor(ctk.CTkFrame):
 
     def _handle_close(self):
         """Handle close with unsaved changes check"""
+        if self.audio_recorder and self.audio_recorder.is_recording:
+            self._stop_audio_recording()
+
         if self.is_modified:
             result = messagebox.askyesnocancel(
                 "Unsaved Changes",

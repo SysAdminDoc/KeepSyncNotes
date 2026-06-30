@@ -22,6 +22,17 @@ from keepsync_attachment_editing import (
     save_clipboard_image_attachment,
     unique_attachment_path,
 )
+from keepsync_audio_recording import (
+    AUDIO_MIME_TYPE,
+    DEFAULT_WHISPER_MODEL,
+    AudioRecorder,
+    AudioRecordingError,
+    AudioTranscriptionError,
+    append_audio_transcript,
+    save_audio_attachment,
+    transcribe_audio_file,
+    write_wav_file,
+)
 from keepsync_dragdrop import drop_copy_action, enable_file_drop
 from keepsync_backups import LocalBackupManager
 from keepsync_bootstrap import run_bootstrap
