@@ -1,6 +1,6 @@
 # KeepSyncNotes
 
-![Version](https://img.shields.io/badge/version-1.43.0-blue)
+![Version](https://img.shields.io/badge/version-1.44.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Language](https://img.shields.io/badge/language-Python-3776AB)
 ![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
@@ -34,7 +34,7 @@ Dependencies are pinned in `requirements.txt`; the app never installs packages a
 - **Keep Colors & Pins** — Preserve Keep note colors, show color swatches in cards, and pin notes to the top
 - **Reminders** — Store local date/time reminders, optional location context, and desktop notifications when available
 - **Sharing Metadata** — Preserve imported "shared with" collaborator metadata without re-sharing notes
-- **Attachments** — Copy imported Keep media locally and show image thumbnails inline
+- **Attachments** — Copy imported and editor-added media locally, paste images from the clipboard, and show image thumbnails inline
 - **OS Keyring Credentials** — Keep, Google Drive, and GitHub sync secrets are stored in the platform credential store with legacy plaintext cleanup
 - **Deterministic Dependencies** — Pinned requirements file with no startup or runtime package installation
 - **Markdown Preview & Toolbar** — Notes tagged `.md` can switch between editable source, rendered preview, and inline formatting controls

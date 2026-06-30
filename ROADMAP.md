@@ -11,7 +11,7 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ### Search & Organization
 
 ### Editor
-- **Image paste + drag-drop** — inline images, auto-resized to sensible width
+- **Image drag-drop** — accept image files dropped onto the editor and attach them inline
 - **Audio recording inline** — record voice notes via `sounddevice`, transcribe via local Whisper
 - **Global hotkey** — `Ctrl+Alt+N` from anywhere to pop a quick-note capture window
 

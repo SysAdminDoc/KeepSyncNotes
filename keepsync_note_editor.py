@@ -2,14 +2,19 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 from typing import Any, Callable, List, Optional
 import uuid
 import webbrowser
 
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageGrab
 
+from keepsync_attachment_editing import (
+    IMAGE_FILETYPES,
+    copy_image_attachment,
+    save_clipboard_image_attachment,
+)
 from keepsync_models import (
     Attachment,
     ChecklistItem,
@@ -392,12 +397,41 @@ class NoteEditor(ctk.CTkFrame):
         attachments_section = ctk.CTkFrame(editor_frame, fg_color="transparent")
         attachments_section.pack(fill="x", pady=(12, 0))
 
+        attachments_header = ctk.CTkFrame(attachments_section, fg_color="transparent")
+        attachments_header.pack(fill="x")
+
         ctk.CTkLabel(
-            attachments_section,
+            attachments_header,
             text="Attachments",
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color=COLORS["text_secondary"]
-        ).pack(anchor="w")
+        ).pack(side="left")
+
+        self.add_image_btn = ctk.CTkButton(
+            attachments_header,
+            text="Add Image",
+            font=ctk.CTkFont(size=12),
+            width=86,
+            height=28,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["accent_blue"],
+            command=self._add_image_attachment
+        )
+        self.add_image_btn.pack(side="right", padx=(8, 0))
+
+        self.paste_image_btn = ctk.CTkButton(
+            attachments_header,
+            text="Paste Image",
+            font=ctk.CTkFont(size=12),
+            width=92,
+            height=28,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["accent_blue"],
+            command=self._paste_image_attachment
+        )
+        self.paste_image_btn.pack(side="right")
 
         self.attachments_frame = ctk.CTkFrame(attachments_section, fg_color="transparent")
         self.attachments_frame.pack(fill="x", pady=(4, 0))
@@ -714,6 +748,42 @@ class NoteEditor(ctk.CTkFrame):
             pass
         if target:
             webbrowser.open(target)
+
+    def _add_image_attachment(self):
+        """Copy an image file into the note attachment store."""
+        if not self.current_note:
+            return
+        path = filedialog.askopenfilename(title="Add Image", filetypes=IMAGE_FILETYPES)
+        if not path:
+            return
+        try:
+            attachment = copy_image_attachment(Path(path), self.db.db_path, self.current_note.id)
+        except Exception as e:
+            messagebox.showerror("Add Image Failed", str(e))
+            return
+        self.current_note.attachments.append(attachment)
+        self._load_attachments(self.current_note.attachments)
+        self._on_modify()
+
+    def _paste_image_attachment(self):
+        """Paste a clipboard image into the note attachment store."""
+        if not self.current_note:
+            return
+        try:
+            clipboard = ImageGrab.grabclipboard()
+            if isinstance(clipboard, Image.Image):
+                attachment = save_clipboard_image_attachment(clipboard, self.db.db_path, self.current_note.id)
+            elif isinstance(clipboard, list) and clipboard:
+                attachment = copy_image_attachment(Path(clipboard[0]), self.db.db_path, self.current_note.id)
+            else:
+                messagebox.showinfo("No Image", "Clipboard does not contain an image.")
+                return
+        except Exception as e:
+            messagebox.showerror("Paste Image Failed", str(e))
+            return
+        self.current_note.attachments.append(attachment)
+        self._load_attachments(self.current_note.attachments)
+        self._on_modify()
 
     def _on_type_change(self):
         """Switch between text and checklist editor"""

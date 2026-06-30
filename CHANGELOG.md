@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.44.0] - 2026-06-30
+
+- Added editor controls to add image files and paste clipboard images into the local attachment store.
+- Reused the existing inline attachment thumbnail renderer for editor-added images.
+- Added attachment insertion helper coverage.
+
 ## [v1.43.0] - 2026-06-30
 
 - Added a Markdown formatting toolbar for `.md` notes with bold, italic, code, link, and task controls.

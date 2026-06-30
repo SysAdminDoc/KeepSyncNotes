@@ -11,6 +11,13 @@ from keepsync_app import (
     desktop_notification,
 )
 from keepsync_app_info import APP_NAME, APP_VERSION, DB_VERSION
+from keepsync_attachment_editing import (
+    IMAGE_FILETYPES,
+    copy_image_attachment,
+    note_attachment_dir,
+    save_clipboard_image_attachment,
+    unique_attachment_path,
+)
 from keepsync_backups import LocalBackupManager
 from keepsync_bootstrap import run_bootstrap
 from keepsync_cloud_plan import (
