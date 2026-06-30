@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.24.0] - 2026-06-30
+
+- Extracted diagnostics logging, crash hooks, dependency state reporting, and module-level diagnostic helpers into `keepsync_diagnostics.py`.
+- Passed app/version/feature availability metadata into diagnostics reports without importing the app module.
+- Added direct diagnostics module coverage while preserving app compatibility re-exports.
+
 ## [v1.23.0] - 2026-06-28
 
 - Moved the `Label` data model into `keepsync_models.py` with the other note data classes.

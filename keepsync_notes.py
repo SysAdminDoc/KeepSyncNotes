@@ -33,14 +33,11 @@ import threading
 import queue
 import time
 import os
-import sys
 import re
 import shutil
 import tempfile
 import zipfile
 import difflib
-import traceback
-import importlib.util
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from html import unescape
@@ -90,6 +87,13 @@ from keepsync_import_safety import (
     validate_zip_members,
 )
 from keepsync_backups import LocalBackupManager
+import keepsync_diagnostics as diagnostics_state
+from keepsync_diagnostics import (
+    DiagnosticsManager,
+    log_diagnostic_event,
+    log_diagnostic_exception,
+    set_diagnostics_manager,
+)
 
 try:
     import keyring
@@ -117,7 +121,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.23.0"
+APP_VERSION = "1.24.0"
 DB_VERSION = 1
 KEYRING_SERVICE = "KeepSyncNotes"
 KEEP_MASTER_TOKEN_CREDENTIAL = "google_keep_master_token"
@@ -597,115 +601,6 @@ def parse_external_datetime(value: Any) -> Optional[datetime]:
         except ValueError:
             continue
     return None
-
-class DiagnosticsManager:
-    """File-backed diagnostics and crash logging."""
-
-    DEPENDENCIES = {
-        "customtkinter": "customtkinter",
-        "Pillow": "PIL",
-        "requests": "requests",
-        "gkeepapi": "gkeepapi",
-        "gpsoauth": "gpsoauth",
-        "browser-cookie3": "browser_cookie3",
-        "plyer": "plyer",
-        "keyring": "keyring",
-        "PyGithub": "github",
-        "google-api-python-client": "googleapiclient",
-        "google-auth": "google.auth",
-        "google-auth-oauthlib": "google_auth_oauthlib",
-    }
-
-    def __init__(self, data_dir: Path):
-        self.data_dir = Path(data_dir)
-        self.log_dir = self.data_dir / "logs"
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        self.log_path = self.log_dir / "keepsync-diagnostics.log"
-        self.last_exception = ""
-        self._previous_sys_hook = None
-        self._previous_thread_hook = None
-
-    def install_hooks(self):
-        self._previous_sys_hook = sys.excepthook
-        sys.excepthook = self._handle_unhandled_exception
-        if hasattr(threading, "excepthook"):
-            self._previous_thread_hook = threading.excepthook
-            threading.excepthook = self._handle_thread_exception
-
-    def _write(self, level: str, message: str):
-        timestamp = datetime.now(timezone.utc).isoformat()
-        with open(self.log_path, "a", encoding="utf-8") as fh:
-            fh.write(f"[{timestamp}] {level.upper()} {message}\n")
-
-    def log_event(self, level: str, message: str):
-        self._write(level, message)
-
-    def log_exception(self, context: str, exc: BaseException):
-        detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
-        self.last_exception = f"{context}: {exc}"
-        self._write("error", f"{context}: {detail}")
-
-    def _handle_unhandled_exception(self, exc_type, exc, tb):
-        detail = "".join(traceback.format_exception(exc_type, exc, tb)).strip()
-        self.last_exception = f"unhandled: {exc}"
-        self._write("critical", f"Unhandled exception: {detail}")
-        if self._previous_sys_hook:
-            self._previous_sys_hook(exc_type, exc, tb)
-
-    def _handle_thread_exception(self, args):
-        detail = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)).strip()
-        self.last_exception = f"thread: {args.exc_value}"
-        self._write("critical", f"Thread exception: {detail}")
-        if self._previous_thread_hook:
-            self._previous_thread_hook(args)
-
-    def dependency_state(self) -> Dict[str, str]:
-        state = {}
-        for package, import_name in self.DEPENDENCIES.items():
-            state[package] = "available" if importlib.util.find_spec(import_name) else "missing"
-        return state
-
-    def recent_log(self, limit: int = 80) -> str:
-        if not self.log_path.exists():
-            return ""
-        lines = self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        return "\n".join(lines[-limit:])
-
-    def report(self, db_path: Path, attachments_path: Path) -> str:
-        dependencies = "\n".join(
-            f"- {package}: {state}"
-            for package, state in sorted(self.dependency_state().items())
-        )
-        return (
-            f"{APP_NAME} v{APP_VERSION}\n"
-            f"Database: {db_path}\n"
-            f"Attachments: {attachments_path}\n"
-            f"Diagnostics log: {self.log_path}\n"
-            f"Keyring available: {KEYRING_AVAILABLE}\n"
-            f"Google Keep API available: {GKEEPAPI_AVAILABLE}\n"
-            f"Desktop notifications available: {DESKTOP_NOTIFICATIONS_AVAILABLE}\n"
-            f"Last exception: {self.last_exception or 'None'}\n\n"
-            f"Dependencies:\n{dependencies}\n\n"
-            f"Recent log:\n{self.recent_log() or 'No log entries.'}"
-        )
-
-
-DIAGNOSTICS: Optional[DiagnosticsManager] = None
-
-
-def set_diagnostics_manager(manager: DiagnosticsManager):
-    global DIAGNOSTICS
-    DIAGNOSTICS = manager
-
-
-def log_diagnostic_event(level: str, message: str):
-    if DIAGNOSTICS:
-        DIAGNOSTICS.log_event(level, message)
-
-
-def log_diagnostic_exception(context: str, exc: BaseException):
-    if DIAGNOSTICS:
-        DIAGNOSTICS.log_exception(context, exc)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA MODELS
@@ -5836,7 +5731,7 @@ class SettingsDialog(ctk.CTkToplevel):
             messagebox.showerror("Restore Failed", str(e))
 
     def _open_diagnostics(self):
-        diagnostics = getattr(self.app, "diagnostics", None) or DIAGNOSTICS
+        diagnostics = getattr(self.app, "diagnostics", None) or diagnostics_state.DIAGNOSTICS
         if not diagnostics:
             messagebox.showerror("Diagnostics Unavailable", "Diagnostics manager is not initialized.")
             return
@@ -6244,7 +6139,16 @@ class KeepSyncNotesApp(ctk.CTk):
         # Set up data directory
         self.data_dir = Path.home() / ".keepsync_notes"
         self.data_dir.mkdir(exist_ok=True)
-        self.diagnostics = DiagnosticsManager(self.data_dir)
+        self.diagnostics = DiagnosticsManager(
+            self.data_dir,
+            APP_NAME,
+            APP_VERSION,
+            {
+                "keyring_available": KEYRING_AVAILABLE,
+                "gkeepapi_available": GKEEPAPI_AVAILABLE,
+                "desktop_notifications_available": DESKTOP_NOTIFICATIONS_AVAILABLE,
+            },
+        )
         set_diagnostics_manager(self.diagnostics)
         self.diagnostics.install_hooks()
         self.diagnostics.log_event("info", f"Started {APP_NAME} v{APP_VERSION}")
