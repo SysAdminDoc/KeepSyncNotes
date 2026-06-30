@@ -51,6 +51,15 @@ class SearchFtsTests(unittest.TestCase):
 
         self.assertEqual(self.db.search_notes("needle"), [])
 
+    def test_restored_note_is_reindexed_for_search(self):
+        self.db.save_note(app.Note(id="restore", title="Restore", content="needle"))
+        self.db.delete_note("restore")
+        self.assertEqual(self.db.search_notes("needle"), [])
+
+        self.assertTrue(self.db.restore_note("restore"))
+
+        self.assertEqual([note.id for note in self.db.search_notes("needle")], ["restore"])
+
     def test_search_can_include_archived_notes(self):
         self.db.save_note(app.Note(
             id="archived",

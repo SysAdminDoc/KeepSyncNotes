@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.31.0] - 2026-06-30
+
+- Replaced note delete confirmation dialogs with a status-bar Undo workflow for trash moves.
+- Added pre-delete local safety backups for permanent deletes from trash.
+- Re-indexed restored notes in SQLite FTS so undo-restored notes immediately appear in search.
+
 ## [v1.30.0] - 2026-06-30
 
 - Added import fidelity reports covering note outcomes, checklists, attachments, labels, reminders, archived/trashed state, sharing metadata, conflicts, and unsupported fields.

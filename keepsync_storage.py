@@ -331,6 +331,10 @@ class DatabaseManager:
                 "UPDATE notes SET trashed = 0, updated_at = ? WHERE id = ?",
                 (datetime.now(timezone.utc).isoformat(), note_id)
             )
+            cursor.execute("SELECT * FROM notes WHERE id = ?", (note_id,))
+            row = cursor.fetchone()
+            if row:
+                self._update_fts(cursor, self._row_to_note(row))
             self.conn.commit()
             return True
         except Exception as e:

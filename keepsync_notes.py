@@ -152,7 +152,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.30.0"
+APP_VERSION = "1.31.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -5044,6 +5044,7 @@ class KeepSyncNotesApp(ctk.CTk):
         self.current_filter = "all"  # all, archived, trash, label:<name>
         self.search_query = ""
         self.advanced_filters = default_advanced_filters()
+        self.pending_delete_undo_note_id: Optional[str] = None
         self.saved_searches = self.db.get_setting("saved_searches", [])
         if not isinstance(self.saved_searches, list):
             self.saved_searches = []
@@ -5219,6 +5220,19 @@ class KeepSyncNotesApp(ctk.CTk):
             text_color=COLORS["text_muted"]
         )
         self.sync_status_label.pack(side="left")
+
+        self.undo_delete_btn = ctk.CTkButton(
+            sync_frame,
+            text="Undo",
+            width=54,
+            height=28,
+            font=ctk.CTkFont(size=12),
+            fg_color=COLORS["accent_blue"],
+            hover_color=COLORS["accent_blue_hover"],
+            command=self._undo_delete_note
+        )
+        self.undo_delete_btn.pack(side="left", padx=(8, 0))
+        self.undo_delete_btn.pack_forget()
         
         self.sync_btn = ctk.CTkButton(
             sync_frame,
@@ -5609,16 +5623,40 @@ class KeepSyncNotesApp(ctk.CTk):
     def _delete_note(self, note: Note):
         """Delete a note (move to trash)"""
         if note.trashed:
-            # Permanent delete
-            if messagebox.askyesno("Delete Permanently", 
-                                   "This will permanently delete the note. Continue?"):
-                self.db.delete_note(note.id, permanent=True)
+            try:
+                LocalBackupManager(self.db, APP_NAME, APP_VERSION).create_backup("before permanent delete")
+            except Exception as e:
+                log_diagnostic_exception("permanent delete backup", e)
+            if self.db.delete_note(note.id, permanent=True):
+                self._clear_delete_undo()
+                self.sync_status_label.configure(text="Deleted permanently", text_color=COLORS["accent_red"])
         else:
-            self.db.delete_note(note.id)
+            if self.db.delete_note(note.id):
+                self.pending_delete_undo_note_id = note.id
+                self.undo_delete_btn.pack(side="left", padx=(8, 0))
+                self.sync_status_label.configure(text="Moved to trash", text_color=COLORS["accent_yellow"])
         
         if self.selected_note and self.selected_note.id == note.id:
             self._close_editor()
         self._refresh_notes_list()
+
+    def _clear_delete_undo(self):
+        self.pending_delete_undo_note_id = None
+        if hasattr(self, "undo_delete_btn"):
+            self.undo_delete_btn.pack_forget()
+
+    def _undo_delete_note(self):
+        note_id = self.pending_delete_undo_note_id
+        if not note_id:
+            self._clear_delete_undo()
+            return
+        if self.db.restore_note(note_id):
+            self._clear_delete_undo()
+            self.sync_status_label.configure(text="Restored note", text_color=COLORS["accent_green"])
+            self._refresh_notes_list()
+            self._refresh_labels()
+        else:
+            self.sync_status_label.configure(text="Restore failed", text_color=COLORS["accent_red"])
     
     def _add_label_dialog(self):
         """Show dialog to add a new label"""

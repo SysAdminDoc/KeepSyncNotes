@@ -1,6 +1,6 @@
 # KeepSyncNotes
 
-![Version](https://img.shields.io/badge/version-1.30.0-blue)
+![Version](https://img.shields.io/badge/version-1.31.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Language](https://img.shields.io/badge/language-Python-3776AB)
 ![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
@@ -44,6 +44,7 @@ Dependencies are pinned in `requirements.txt`; the app never installs packages a
 - **Tag & Label System** — Filter notes by the labels synced from Google Keep
 - **Note Editor** — Create, edit, and delete notes locally after import
 - **Archive & Trash Views** — Mirrors the Google Keep archived and trashed note states
+- **Undoable Trash** — Move notes to trash with an inline Undo action; permanent deletes create a local safety backup first
 - **Local Storage** — All data stored in a local SQLite database — nothing leaves your machine
 - **Dark Theme** — Catppuccin Mocha dark interface throughout
 
