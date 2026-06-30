@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.29.0] - 2026-06-30
+
+- Added `keepsync_paths.py` for predictable platform app data directories with legacy `~/.keepsync_notes` preservation.
+- Replaced direct app data, Google Drive credential, and token path construction with shared path helpers.
+- Added cross-platform path helper coverage and app compatibility re-export checks.
+
 ## [v1.28.0] - 2026-06-30
 
 - Extracted SQLite note, label, settings, sync-log, FTS, and import-conflict persistence into `keepsync_storage.py`.

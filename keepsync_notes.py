@@ -126,6 +126,11 @@ from keepsync_credentials import (
     migrate_setting_secret,
     store_file_secret,
 )
+from keepsync_paths import (
+    get_app_data_dir,
+    get_google_drive_credentials_path,
+    get_google_drive_token_path,
+)
 
 # Optional: gkeepapi for Google Keep sync
 try:
@@ -146,7 +151,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP_NAME = "KeepSync Notes"
-APP_VERSION = "1.28.0"
+APP_VERSION = "1.29.0"
 DB_VERSION = 1
 
 # Theme Colors (User's preferred palette)
@@ -1182,10 +1187,11 @@ class GoogleDriveSync(CloudSyncProvider):
                 return False, "Google Drive dependencies are not installed. Run: python -m pip install -r requirements.txt"
             
             # Default paths
+            data_dir = get_app_data_dir()
             if not token_path:
-                token_path = str(Path.home() / ".keepsync_notes" / "gdrive_token.json")
+                token_path = str(get_google_drive_token_path(data_dir))
             if not credentials_path:
-                credentials_path = str(Path.home() / ".keepsync_notes" / "gdrive_credentials.json")
+                credentials_path = str(get_google_drive_credentials_path(data_dir))
             
             creds = None
             
@@ -4412,7 +4418,7 @@ class SettingsDialog(ctk.CTkToplevel):
             text_color=COLORS["text_primary"]
         ).pack(anchor="w", padx=16, pady=(16, 8))
         
-        db_path = str(Path.home() / ".keepsync_notes" / "notes.db")
+        db_path = str(Path(self.db.db_path))
         ctk.CTkLabel(
             info_frame,
             text=db_path,
@@ -4616,7 +4622,8 @@ class SettingsDialog(ctk.CTkToplevel):
     
     def _show_gdrive_instructions(self):
         """Show Google Drive setup instructions"""
-        instructions = """Google Drive Setup Instructions
+        credentials_path = get_google_drive_credentials_path()
+        instructions = f"""Google Drive Setup Instructions
 
 1. Go to console.cloud.google.com
 
@@ -4634,7 +4641,7 @@ class SettingsDialog(ctk.CTkToplevel):
    - Download the JSON file
 
 5. Save the JSON file as:
-   ~/.keepsync_notes/gdrive_credentials.json
+   {credentials_path}
 
 6. Click "Connect to Google Drive" again
 
@@ -5013,8 +5020,8 @@ class KeepSyncNotesApp(ctk.CTk):
         self.configure(fg_color=COLORS["bg_darkest"])
         
         # Set up data directory
-        self.data_dir = Path.home() / ".keepsync_notes"
-        self.data_dir.mkdir(exist_ok=True)
+        self.data_dir = get_app_data_dir()
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.diagnostics = DiagnosticsManager(
             self.data_dir,
             APP_NAME,
