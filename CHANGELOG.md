@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.36.0] - 2026-06-30
+
+- Extracted `SettingsDialog` and its settings-backed import/export workflows into `keepsync_settings_dialog.py`.
+- Passed app metadata and the browser scraper factory into the settings dialog without importing the app module.
+- Added settings dialog compatibility re-export coverage.
+
 ## [v1.35.0] - 2026-06-30
 
 - Extracted standalone UI dialogs into `keepsync_ui_dialogs.py`.

@@ -1,6 +1,7 @@
 import unittest
 
 import keepsync_notes as app
+import keepsync_settings_dialog as settings_dialog
 import keepsync_theme as theme
 import keepsync_ui_dialogs as dialogs
 
@@ -18,6 +19,7 @@ class UIDialogsModuleTests(unittest.TestCase):
         self.assertIs(app.TokenGeneratorDialog, dialogs.TokenGeneratorDialog)
         self.assertIs(app.ImportProgressDialog, dialogs.ImportProgressDialog)
         self.assertIs(app.DiagnosticsDialog, dialogs.DiagnosticsDialog)
+        self.assertIs(app.SettingsDialog, settings_dialog.SettingsDialog)
 
 
 if __name__ == "__main__":
