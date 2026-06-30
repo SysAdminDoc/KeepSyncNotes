@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.40.0] - 2026-06-30
+
+- Extracted app metadata, Google Keep sync/auth helpers, and the main app shell into dedicated modules.
+- Reduced `keepsync_notes.py` to a compatibility entry point and bootstrap wrapper.
+- Added app-shell module-boundary coverage for the new split.
+
 ## [v1.39.0] - 2026-06-30
 
 - Extracted the note editor panel into `keepsync_note_editor.py`.
