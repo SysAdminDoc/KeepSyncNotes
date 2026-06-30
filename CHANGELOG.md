@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.25.0] - 2026-06-30
+
+- Extracted note diff, duplicate equivalence, conflict merge, import-label normalization, and advanced-filter helpers into `keepsync_note_ops.py`.
+- Kept app-level helper names as compatibility imports for existing callers and tests.
+- Updated advanced-filter coverage to exercise the extracted note operations module directly.
+
 ## [v1.24.0] - 2026-06-30
 
 - Extracted diagnostics logging, crash hooks, dependency state reporting, and module-level diagnostic helpers into `keepsync_diagnostics.py`.

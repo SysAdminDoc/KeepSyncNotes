@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
+import keepsync_note_ops as note_ops
 import keepsync_notes as app
 
 
@@ -16,7 +17,7 @@ class AdvancedFilterTests(unittest.TestCase):
             checklist_items=[app.ChecklistItem(text="Task")],
             updated_at=datetime(2026, 6, 27, tzinfo=timezone.utc),
         )
-        filters = app.default_advanced_filters()
+        filters = note_ops.default_advanced_filters()
         filters.update({
             "label": "work",
             "color": "yellow",
@@ -25,14 +26,14 @@ class AdvancedFilterTests(unittest.TestCase):
             "has_checklist": True,
         })
 
-        self.assertTrue(app.note_matches_advanced_filters(note, filters))
+        self.assertTrue(note_ops.note_matches_advanced_filters(note, filters))
 
     def test_or_filter_matches_any_selected_predicate(self):
         note = app.Note(id="n1", title="Filtered", content="", labels=["personal"], color="blue")
-        filters = app.default_advanced_filters()
+        filters = note_ops.default_advanced_filters()
         filters.update({"mode": "OR", "label": "work", "color": "blue"})
 
-        self.assertTrue(app.note_matches_advanced_filters(note, filters))
+        self.assertTrue(note_ops.note_matches_advanced_filters(note, filters))
 
     def test_filter_rejects_out_of_range_dates(self):
         note = app.Note(
@@ -41,10 +42,10 @@ class AdvancedFilterTests(unittest.TestCase):
             content="",
             updated_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
         )
-        filters = app.default_advanced_filters()
+        filters = note_ops.default_advanced_filters()
         filters.update({"date_from": "2026-06-01"})
 
-        self.assertFalse(app.note_matches_advanced_filters(note, filters))
+        self.assertFalse(note_ops.note_matches_advanced_filters(note, filters))
 
     def test_image_and_archived_filters(self):
         note = app.Note(
@@ -54,10 +55,16 @@ class AdvancedFilterTests(unittest.TestCase):
             archived=True,
             attachments=[app.Attachment(filename="scan.png", stored_path="scan.png", mime_type="image/png")],
         )
-        filters = app.default_advanced_filters()
+        filters = note_ops.default_advanced_filters()
         filters.update({"has_image": True, "is_archived": True})
 
-        self.assertTrue(app.note_matches_advanced_filters(note, filters))
+        self.assertTrue(note_ops.note_matches_advanced_filters(note, filters))
+
+    def test_app_reexports_note_ops_for_compatibility(self):
+        self.assertIs(app.default_advanced_filters, note_ops.default_advanced_filters)
+        self.assertIs(app.note_matches_advanced_filters, note_ops.note_matches_advanced_filters)
+        self.assertIs(app.notes_equivalent, note_ops.notes_equivalent)
+        self.assertIs(app.parse_filter_date, note_ops.parse_filter_date)
 
 
 if __name__ == "__main__":
