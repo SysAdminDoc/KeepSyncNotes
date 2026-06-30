@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.35.0] - 2026-06-30
+
+- Extracted standalone UI dialogs into `keepsync_ui_dialogs.py`.
+- Moved shared UI color tokens into `keepsync_theme.py` for non-circular UI imports.
+- Preserved app-level dialog and theme imports for compatibility.
+
 ## [v1.34.0] - 2026-06-30
 
 - Extracted Google Drive/GitHub cloud sync providers and `CloudSyncManager` into `keepsync_cloud_sync.py`.
