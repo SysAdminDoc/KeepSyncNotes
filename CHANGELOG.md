@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.38.0] - 2026-06-30
+
+- Extracted reusable note card, sync badge, and icon components into `keepsync_ui_components.py`.
+- Wired note-card markdown and reminder helpers from the app without importing the app module.
+- Added UI component compatibility re-export coverage.
+
 ## [v1.37.0] - 2026-06-30
 
 - Extracted CLI/bootstrap dispatch into `keepsync_bootstrap.py`.
