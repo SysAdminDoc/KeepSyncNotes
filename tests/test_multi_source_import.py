@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 
 import keepsync_import_safety as import_safety
+import keepsync_importers as importers
 import keepsync_notes as app
 
 
@@ -13,7 +14,7 @@ class MultiSourceImporterTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.db = app.DatabaseManager(str(self.root / "notes.db"))
-        self.importer = app.MultiSourceImporter(self.db)
+        self.importer = importers.MultiSourceImporter(self.db)
 
     def tearDown(self):
         self.db.close()
@@ -101,7 +102,7 @@ class MultiSourceImporterTests(unittest.TestCase):
         with zipfile.ZipFile(export_path, "w") as zf:
             zf.writestr("../escape.md", "bad")
 
-        with self.assertRaises(app.ImportSafetyError):
+        with self.assertRaises(importers.ImportSafetyError):
             self.importer.import_text_zip(export_path, "Obsidian", markdown_default=True)
 
     def test_text_zip_uses_extension_allowlist(self):
@@ -122,7 +123,7 @@ class MultiSourceImporterTests(unittest.TestCase):
             with zipfile.ZipFile(export_path, "w") as zf:
                 zf.writestr("large.md", "x" * 32)
 
-            with self.assertRaises(app.ImportSafetyError):
+            with self.assertRaises(importers.ImportSafetyError):
                 self.importer.import_text_zip(export_path, "Obsidian", markdown_default=True)
         finally:
             import_safety.MAX_IMPORT_ZIP_UNCOMPRESSED_BYTES = original_limit
@@ -132,10 +133,17 @@ class MultiSourceImporterTests(unittest.TestCase):
         with zipfile.ZipFile(export_path, "w") as zf:
             zf.writestr("Takeout/Keep/keep-note.json", json.dumps({"title": "Cancelled"}))
 
-        importer = app.MultiSourceImporter(self.db, cancel_check=lambda: True)
+        importer = importers.MultiSourceImporter(self.db, cancel_check=lambda: True)
 
-        with self.assertRaises(app.ImportCancelled):
+        with self.assertRaises(importers.ImportCancelled):
             importer.import_takeout_zip(export_path)
+
+    def test_app_reexports_importer_api_for_compatibility(self):
+        self.assertIs(app.MultiSourceImporter, importers.MultiSourceImporter)
+        self.assertIs(app.HTMLTextExtractor, importers.HTMLTextExtractor)
+        self.assertIs(app.html_to_text, importers.html_to_text)
+        self.assertIs(app.import_takeout_attachments, importers.import_takeout_attachments)
+        self.assertIs(app.extract_shared_with, importers.extract_shared_with)
 
     def test_import_conflict_copy_marks_duplicate(self):
         local = app.Note(id="local", title="Same title", content="Local body")

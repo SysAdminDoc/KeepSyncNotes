@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.27.0] - 2026-06-30
+
+- Extracted multi-source importers, Takeout attachment parsing, and HTML/ENEX/text parsing helpers into `keepsync_importers.py`.
+- Preserved app-level importer and helper names as compatibility imports for existing UI code.
+- Updated multi-source importer tests to exercise the extracted importer module directly.
+
 ## [v1.26.0] - 2026-06-30
 
 - Extracted OS keyring credential storage and legacy token migration into `keepsync_credentials.py`.
