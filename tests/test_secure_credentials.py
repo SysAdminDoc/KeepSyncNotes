@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import keepsync_credentials as credentials
 import keepsync_notes as app
 
 
@@ -38,39 +39,46 @@ class SecureCredentialTests(unittest.TestCase):
     def test_migrates_sqlite_secret_to_keyring_and_deletes_setting(self):
         self.db.set_setting("keep_master_token", "legacy-token")
 
-        secret = app.migrate_setting_secret(
+        secret = credentials.migrate_setting_secret(
             self.db,
             "keep_master_token",
-            app.KEEP_MASTER_TOKEN_CREDENTIAL,
+            credentials.KEEP_MASTER_TOKEN_CREDENTIAL,
         )
 
         self.assertEqual(secret, "legacy-token")
-        self.assertEqual(self.store.values[app.KEEP_MASTER_TOKEN_CREDENTIAL], "legacy-token")
+        self.assertEqual(self.store.values[credentials.KEEP_MASTER_TOKEN_CREDENTIAL], "legacy-token")
         self.assertIsNone(self.db.get_setting("keep_master_token"))
 
     def test_migrates_legacy_token_file_to_keyring_and_deletes_file(self):
         token_file = Path(self.tmp.name) / "gdrive_token.json"
         token_file.write_text('{"refresh_token": "legacy"}', encoding="utf-8")
 
-        secret = app.migrate_file_secret(str(token_file), app.GDRIVE_OAUTH_TOKEN_CREDENTIAL)
+        secret = credentials.migrate_file_secret(str(token_file), credentials.GDRIVE_OAUTH_TOKEN_CREDENTIAL)
 
         self.assertEqual(secret, '{"refresh_token": "legacy"}')
-        self.assertEqual(self.store.values[app.GDRIVE_OAUTH_TOKEN_CREDENTIAL], '{"refresh_token": "legacy"}')
+        self.assertEqual(self.store.values[credentials.GDRIVE_OAUTH_TOKEN_CREDENTIAL], '{"refresh_token": "legacy"}')
         self.assertFalse(token_file.exists())
 
     def test_store_file_secret_removes_legacy_file_copy(self):
         token_file = Path(self.tmp.name) / "gdrive_token.json"
         token_file.write_text('{"refresh_token": "legacy"}', encoding="utf-8")
 
-        saved = app.store_file_secret(
-            app.GDRIVE_OAUTH_TOKEN_CREDENTIAL,
+        saved = credentials.store_file_secret(
+            credentials.GDRIVE_OAUTH_TOKEN_CREDENTIAL,
             '{"refresh_token": "new"}',
             str(token_file),
         )
 
         self.assertTrue(saved)
-        self.assertEqual(self.store.values[app.GDRIVE_OAUTH_TOKEN_CREDENTIAL], '{"refresh_token": "new"}')
+        self.assertEqual(self.store.values[credentials.GDRIVE_OAUTH_TOKEN_CREDENTIAL], '{"refresh_token": "new"}')
         self.assertFalse(token_file.exists())
+
+    def test_app_reexports_credential_api_for_compatibility(self):
+        self.assertIs(app.KeyringCredentialStore, credentials.KeyringCredentialStore)
+        self.assertIs(app.migrate_setting_secret, credentials.migrate_setting_secret)
+        self.assertIs(app.migrate_file_secret, credentials.migrate_file_secret)
+        self.assertIs(app.store_file_secret, credentials.store_file_secret)
+        self.assertEqual(app.KEEP_MASTER_TOKEN_CREDENTIAL, credentials.KEEP_MASTER_TOKEN_CREDENTIAL)
 
 
 if __name__ == "__main__":

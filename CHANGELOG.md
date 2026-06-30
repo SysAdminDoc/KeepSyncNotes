@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.26.0] - 2026-06-30
+
+- Extracted OS keyring credential storage and legacy token migration into `keepsync_credentials.py`.
+- Preserved app-level credential constants and helpers as compatibility imports and wrappers.
+- Updated secure credential tests to exercise the extracted module directly.
+
 ## [v1.25.0] - 2026-06-30
 
 - Extracted note diff, duplicate equivalence, conflict merge, import-label normalization, and advanced-filter helpers into `keepsync_note_ops.py`.
