@@ -54,6 +54,7 @@ from keepsync_settings_dialog import SettingsDialog
 from keepsync_storage import DatabaseManager
 from keepsync_tag_graph import build_tag_graph, tag_graph_summary_lines
 from keepsync_theme import COLORS, set_theme
+from keepsync_tray import TRAY_AVAILABLE, SystemTray
 from keepsync_ui_components import IconManager, NoteCard
 from keepsync_ui_dialogs import (
     AdvancedFilterDialog,
@@ -145,6 +146,11 @@ class KeepSyncNotesApp(ctk.CTk):
         if self.db.get_setting("auto_sync", True):
             interval = self.db.get_setting("sync_interval", 5)
             self.sync_engine.start_auto_sync(interval)
+
+        # System tray
+        self._tray: Optional[SystemTray] = None
+        if TRAY_AVAILABLE and self.db.get_setting("system_tray", True):
+            self._start_tray()
 
     def _build_ui(self):
         """Build the main UI"""
@@ -1280,6 +1286,20 @@ class KeepSyncNotesApp(ctk.CTk):
         if not notified:
             self.bell()
 
+    def _start_tray(self):
+        self._tray = SystemTray(
+            app_name=APP_NAME,
+            on_new_note=lambda: self.after(0, self._new_note),
+            on_show=lambda: self.after(0, self._show_from_tray),
+            on_quit=lambda: self.after(0, self.on_closing),
+        )
+        self._tray.start()
+
+    def _show_from_tray(self):
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
     def on_closing(self):
         """Handle window close"""
         if self._reminder_after_id:
@@ -1292,6 +1312,9 @@ class KeepSyncNotesApp(ctk.CTk):
             except Exception:
                 pass
         self._detached_windows.clear()
+        if self._tray:
+            self._tray.stop()
+            self._tray = None
         self.sync_engine.stop_auto_sync()
         self.cloud_sync.stop_auto_sync()
         self.db.close()

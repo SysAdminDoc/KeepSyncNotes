@@ -173,6 +173,7 @@ from keepsync_tag_graph import (
     tag_graph_summary_lines,
 )
 from keepsync_theme import COLORS
+from keepsync_tray import TRAY_AVAILABLE, SystemTray
 from keepsync_ui_components import (
     IconManager,
     NoteCard,
