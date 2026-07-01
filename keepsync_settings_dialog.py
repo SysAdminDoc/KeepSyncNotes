@@ -19,6 +19,11 @@ from keepsync_import_reports import IMPORT_SUCCESS_STATUSES, import_summary_line
 from keepsync_import_safety import ImportCancelled
 from keepsync_importers import MultiSourceImporter, extract_shared_with, import_takeout_attachments
 from keepsync_markdown_export import export_markdown_vault
+from keepsync_encrypted_backup import (
+    create_encrypted_backup,
+    read_backup_header,
+    restore_encrypted_backup,
+)
 from keepsync_pdf_export import export_pdf_book
 from keepsync_models import ChecklistItem, Note, NoteType, SyncStatus, normalize_keep_color
 from keepsync_note_ops import notes_equivalent
@@ -657,6 +662,48 @@ class SettingsDialog(ctk.CTkToplevel):
             command=self._restore_local_backup
         ).pack(side="left", fill="x", expand=True)
 
+        enc_frame = ctk.CTkFrame(data_frame, fg_color=COLORS["bg_dark"], corner_radius=8)
+        enc_frame.pack(fill="x", padx=16, pady=(0, 16))
+
+        ctk.CTkLabel(
+            enc_frame,
+            text="Encrypted Backup",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", padx=12, pady=(12, 4))
+
+        ctk.CTkLabel(
+            enc_frame,
+            text="AES-256-GCM encrypted SQLite dump with a password.",
+            font=ctk.CTkFont(size=11),
+            text_color=COLORS["text_muted"]
+        ).pack(anchor="w", padx=12, pady=(0, 10))
+
+        enc_buttons = ctk.CTkFrame(enc_frame, fg_color="transparent")
+        enc_buttons.pack(fill="x", padx=12, pady=(0, 12))
+
+        ctk.CTkButton(
+            enc_buttons,
+            text="Create Encrypted Backup",
+            font=ctk.CTkFont(size=12),
+            height=34,
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_hover"],
+            text_color=COLORS["bg_darkest"],
+            command=self._create_encrypted_backup
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        ctk.CTkButton(
+            enc_buttons,
+            text="Restore Encrypted",
+            font=ctk.CTkFont(size=12),
+            height=34,
+            fg_color=COLORS["accent_yellow"],
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["bg_darkest"],
+            command=self._restore_encrypted_backup
+        ).pack(side="left", fill="x", expand=True)
+
         ctk.CTkButton(
             data_frame,
             text="Open Diagnostics",
@@ -872,6 +919,84 @@ class SettingsDialog(ctk.CTkToplevel):
             self.destroy()
         except Exception as e:
             messagebox.showerror("Restore Failed", str(e))
+
+    def _create_encrypted_backup(self):
+        password = self._ask_password("Set Backup Password", "Enter a password to encrypt the backup:")
+        if not password:
+            return
+        filepath = filedialog.asksaveasfilename(
+            title="Save Encrypted Backup",
+            defaultextension=".ksenc",
+            filetypes=[("KeepSync encrypted backups", "*.ksenc"), ("All files", "*.*")],
+        )
+        if not filepath:
+            return
+
+        def worker():
+            try:
+                result = create_encrypted_backup(self.db.db_path, Path(filepath), password)
+                message = (
+                    f"Encrypted backup created:\n{result.output_path}\n\n"
+                    f"Notes: {result.notes_count}\n"
+                    f"Size: {result.size_bytes:,} bytes\n\n"
+                    f"Keep your password safe — the backup cannot be recovered without it."
+                )
+                self.after(0, lambda: messagebox.showinfo("Encrypted Backup Created", message))
+            except Exception as e:
+                log_diagnostic_exception("encrypted backup create", e)
+                self.after(0, lambda message=str(e): messagebox.showerror("Encrypted Backup Failed", message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _restore_encrypted_backup(self):
+        selected = filedialog.askopenfilename(
+            title="Select encrypted backup",
+            filetypes=[("KeepSync encrypted backups", "*.ksenc"), ("All files", "*.*")],
+        )
+        if not selected:
+            return
+
+        header = read_backup_header(Path(selected))
+        if not header:
+            messagebox.showerror("Invalid File", "The selected file is not a valid KeepSync encrypted backup.")
+            return
+
+        password = self._ask_password(
+            "Enter Backup Password",
+            f"Backup from: {header.get('created', 'unknown')}\nEnter the password used to create this backup:",
+        )
+        if not password:
+            return
+
+        def worker():
+            try:
+                count = restore_encrypted_backup(Path(selected), password, self.db.db_path)
+                self.after(0, lambda: self._on_encrypted_restore_complete(selected, count))
+            except ValueError as e:
+                self.after(0, lambda message=str(e): messagebox.showerror("Restore Failed", message))
+            except Exception as e:
+                log_diagnostic_exception("encrypted backup restore", e)
+                self.after(0, lambda message=str(e): messagebox.showerror("Restore Failed", message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_encrypted_restore_complete(self, path: str, count: int):
+        if hasattr(self.app, "restore_local_backup"):
+            self.db = DatabaseManager(self.db.db_path)
+            self.app.db = self.db
+            self.app.sync_engine.db = self.db
+            self.app.editor.db = self.db
+            self.app._refresh_notes_list()
+            self.app._refresh_labels()
+        messagebox.showinfo(
+            "Restore Complete",
+            f"Restored encrypted backup:\n{path}\n\nNotes restored: {count}",
+        )
+        self.destroy()
+
+    def _ask_password(self, title: str, prompt: str) -> str:
+        dialog = ctk.CTkInputDialog(text=prompt, title=title)
+        return (dialog.get_input() or "").strip()
 
     def _open_diagnostics(self):
         diagnostics = getattr(self.app, "diagnostics", None) or diagnostics_state.DIAGNOSTICS

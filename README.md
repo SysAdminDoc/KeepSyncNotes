@@ -1,6 +1,6 @@
 # KeepSyncNotes
 
-![Version](https://img.shields.io/badge/version-1.47.0-blue)
+![Version](https://img.shields.io/badge/version-1.48.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Language](https://img.shields.io/badge/language-Python-3776AB)
 ![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
@@ -36,6 +36,8 @@ Dependencies are pinned in `requirements.txt`; the app never installs packages a
 - **Sharing Metadata** — Preserve imported "shared with" collaborator metadata without re-sharing notes
 - **Attachments** — Copy imported and editor-added media locally, paste or drag/drop images into notes, and show image thumbnails inline
 - **Voice Notes** — Record WAV voice notes in the editor and append local Whisper transcripts inline
+- **Portable Exports** — Export all notes as an Obsidian-style Markdown vault or a single PDF book
+- **Encrypted Backup** — AES-256-GCM encrypted SQLite dump with a user password (PBKDF2-SHA256 key derivation)
 - **OS Keyring Credentials** — Keep, Google Drive, and GitHub sync secrets are stored in the platform credential store with legacy plaintext cleanup
 - **Deterministic Dependencies** — Pinned requirements file with no startup or runtime package installation
 - **Markdown Preview & Toolbar** — Notes tagged `.md` can switch between editable source, rendered preview, and inline formatting controls

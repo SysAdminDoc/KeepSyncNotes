@@ -34,6 +34,12 @@ from keepsync_audio_recording import (
     write_wav_file,
 )
 from keepsync_dragdrop import drop_copy_action, enable_file_drop
+from keepsync_encrypted_backup import (
+    EncryptedBackupResult,
+    create_encrypted_backup,
+    read_backup_header,
+    restore_encrypted_backup,
+)
 from keepsync_backups import LocalBackupManager
 from keepsync_bootstrap import run_bootstrap
 from keepsync_cloud_plan import (

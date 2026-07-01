@@ -13,7 +13,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ### Editor
 
 ### Export & Portability
-- **Encrypted backup** — AES-GCM SQLite dump with password
 
 ### UX
 - **Multi-window** — open a note in its own window for side-by-side

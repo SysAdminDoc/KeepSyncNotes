@@ -5,6 +5,7 @@ from pathlib import Path
 
 from keepsync_models import ChecklistItem, Note, NoteType
 import keepsync_pdf_export as pdf_export
+import keepsync_notes as app
 
 
 class PdfExportTests(unittest.TestCase):
@@ -85,6 +86,10 @@ class PdfExportTests(unittest.TestCase):
         self.assertEqual(pdf_export._safe("hello"), "hello")
         result = pdf_export._safe("\U0001f680")
         self.assertIsInstance(result, str)
+
+    def test_app_reexports_pdf_export_helpers_for_compatibility(self):
+        self.assertIs(app.export_pdf_book, pdf_export.export_pdf_book)
+        self.assertIs(app.PdfExportResult, pdf_export.PdfExportResult)
 
 
 if __name__ == "__main__":
