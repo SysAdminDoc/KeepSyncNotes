@@ -1,6 +1,6 @@
 # KeepSyncNotes
 
-![Version](https://img.shields.io/badge/version-1.51.0-blue)
+![Version](https://img.shields.io/badge/version-1.52.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Language](https://img.shields.io/badge/language-Python-3776AB)
 ![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
@@ -45,6 +45,7 @@ Dependencies are pinned in `requirements.txt`; the app never installs packages a
 - **Advanced Filters** — Combine label, color, date range, image, checklist, and archive filters with AND/OR logic
 - **Saved Searches** — Pin query/filter combinations as reusable virtual folders, including FTS label/checklist hits and archived-note filters
 - **Hierarchical Folders** — Use slash-delimited folder labels like `Work/Clients/Acme` with a dedicated folder sidebar
+- **Daily Review** — Surface 3 random old notes for memory refresh, Anki-style, with shuffle and open
 - **Tag Graph** — Inspect label co-occurrence counts and shared-label relationships across your notes
 - **Multi-Window Editing** — Pop out any note into its own window for side-by-side comparison
 - **Accessible Modals** — Custom dialogs consistently manage modal focus, Escape handling, close behavior, and focus return

@@ -28,7 +28,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 - LLM summarization via LlamaLink endpoint for "summarize this week's notes"
 - Android companion app (Kotlin/Compose) that reads the same SQLite over Syncthing
 - OCR on imported images via Tesseract so handwritten scans are searchable
-- Daily review mode: surface 3 random old notes to refresh memory (Anki-style)
 - Import from clipboard history (Windows WinRT, macOS NSPasteboard) for captured snippets
 
 ## Open-Source Research (Round 2)

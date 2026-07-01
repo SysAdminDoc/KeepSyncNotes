@@ -14,6 +14,7 @@ import customtkinter as ctk
 from keepsync_app_info import APP_NAME, APP_VERSION, DB_VERSION
 from keepsync_backups import LocalBackupManager
 from keepsync_cloud_sync import CloudSyncManager
+from keepsync_daily_review import pick_review_notes, review_summary
 from keepsync_credentials import KEYRING_AVAILABLE
 from keepsync_diagnostics import (
     DiagnosticsManager,
@@ -257,6 +258,20 @@ class KeepSyncNotesApp(ctk.CTk):
             command=self._open_tag_graph
         )
         tag_graph_btn.pack(fill="x", pady=2)
+
+        review_btn = ctk.CTkButton(
+            nav_frame,
+            text="Daily Review",
+            image=IconManager.get_icon("sync", 18, COLORS["accent_cyan"]),
+            font=ctk.CTkFont(size=13),
+            height=40,
+            fg_color="transparent",
+            hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_secondary"],
+            anchor="w",
+            command=self._open_daily_review
+        )
+        review_btn.pack(fill="x", pady=2)
 
         # Folders section
         folders_header = ctk.CTkFrame(sidebar, fg_color="transparent")
@@ -732,6 +747,121 @@ class KeepSyncNotesApp(ctk.CTk):
             command=dialog.destroy
         )
         close_btn.pack(anchor="e", pady=(12, 0))
+        configure_modal_dialog(dialog, self, initial_focus=close_btn)
+
+    def _open_daily_review(self):
+        all_notes = self.db.get_all_notes(include_archived=True)
+        review_notes = pick_review_notes(all_notes, count=3, min_age_days=7)
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Daily Review")
+        dialog.geometry("520x560")
+        dialog.configure(fg_color=COLORS["bg_dark"])
+
+        frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(
+            frame,
+            text="Daily Review",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", pady=(0, 4))
+
+        ctk.CTkLabel(
+            frame,
+            text="Rediscover old notes from your collection",
+            font=ctk.CTkFont(size=12),
+            text_color=COLORS["text_muted"]
+        ).pack(anchor="w", pady=(0, 16))
+
+        if not review_notes:
+            ctk.CTkLabel(
+                frame,
+                text="No notes old enough for review yet.\nNotes need to be at least 7 days old.",
+                font=ctk.CTkFont(size=13),
+                text_color=COLORS["text_secondary"],
+                justify="center",
+            ).pack(expand=True)
+        else:
+            for note in review_notes:
+                card = ctk.CTkFrame(frame, fg_color=COLORS["bg_medium"], corner_radius=10)
+                card.pack(fill="x", pady=6)
+
+                title = note.title.strip() or "Untitled"
+                ctk.CTkLabel(
+                    card,
+                    text=title,
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    text_color=COLORS["text_primary"],
+                    anchor="w",
+                ).pack(fill="x", padx=12, pady=(12, 2))
+
+                age = (datetime.now(timezone.utc) - note.created_at).days if note.created_at else 0
+                meta = f"{age} days ago"
+                if note.labels:
+                    meta += f" | {', '.join(note.labels)}"
+                ctk.CTkLabel(
+                    card,
+                    text=meta,
+                    font=ctk.CTkFont(size=11),
+                    text_color=COLORS["text_muted"],
+                    anchor="w",
+                ).pack(fill="x", padx=12, pady=(0, 4))
+
+                preview = (note.content or "").strip()[:200]
+                if note.checklist_items:
+                    items = [item.text for item in note.checklist_items if item.text.strip()]
+                    preview = ", ".join(items[:4])
+                if preview:
+                    ctk.CTkLabel(
+                        card,
+                        text=preview,
+                        font=ctk.CTkFont(size=12),
+                        text_color=COLORS["text_secondary"],
+                        anchor="w",
+                        wraplength=440,
+                        justify="left",
+                    ).pack(fill="x", padx=12, pady=(0, 4))
+
+                open_btn = ctk.CTkButton(
+                    card,
+                    text="Open",
+                    font=ctk.CTkFont(size=12),
+                    width=60,
+                    height=28,
+                    fg_color=COLORS["accent_blue"],
+                    hover_color=COLORS["accent_blue_hover"],
+                    text_color=COLORS["bg_darkest"],
+                    command=lambda n=note: (dialog.destroy(), self._open_note(n)),
+                )
+                open_btn.pack(anchor="e", padx=12, pady=(0, 12))
+
+        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_row.pack(fill="x", pady=(12, 0))
+
+        if review_notes:
+            shuffle_btn = ctk.CTkButton(
+                btn_row,
+                text="Shuffle",
+                height=36,
+                fg_color=COLORS["accent_cyan"],
+                hover_color=COLORS["bg_hover"],
+                text_color=COLORS["bg_darkest"],
+                command=lambda: (dialog.destroy(), self._open_daily_review()),
+            )
+            shuffle_btn.pack(side="left")
+
+        close_btn = ctk.CTkButton(
+            btn_row,
+            text="Close",
+            height=36,
+            fg_color=COLORS["accent_green"],
+            hover_color=COLORS["accent_green_hover"],
+            text_color=COLORS["bg_darkest"],
+            command=dialog.destroy,
+        )
+        close_btn.pack(side="right")
         configure_modal_dialog(dialog, self, initial_focus=close_btn)
 
     def _apply_advanced_filters(self, filters: Dict[str, Any]):
