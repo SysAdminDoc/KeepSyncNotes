@@ -52,13 +52,14 @@ class NoteEditor(ctk.CTkFrame):
     """Full note editor panel"""
 
     def __init__(self, parent, db: DatabaseManager, sync_engine: Any,
-                 on_save: Callable, on_close: Callable, **kwargs):
+                 on_save: Callable, on_close: Callable, on_popout: Optional[Callable] = None, **kwargs):
         super().__init__(parent, fg_color=COLORS["bg_dark"], **kwargs)
 
         self.db = db
         self.sync_engine = sync_engine
         self.on_save_callback = on_save
         self.on_close_callback = on_close
+        self.on_popout_callback = on_popout
         self.current_note: Optional[Note] = None
         self.is_modified = False
         self.selected_color = ""
@@ -115,6 +116,19 @@ class NoteEditor(ctk.CTkFrame):
             command=self._toggle_pin
         )
         self.pin_btn.pack(side="left", padx=2)
+
+        if self.on_popout_callback:
+            popout_btn = ctk.CTkButton(
+                actions_frame,
+                text="",
+                image=IconManager.get_icon("note", 18, COLORS["text_secondary"]),
+                width=36,
+                height=36,
+                fg_color="transparent",
+                hover_color=COLORS["bg_hover"],
+                command=self._handle_popout,
+            )
+            popout_btn.pack(side="left", padx=2)
 
         self.save_btn = ctk.CTkButton(
             actions_frame,
@@ -1311,6 +1325,12 @@ class NoteEditor(ctk.CTkFrame):
             self.sync_badge.update_status(SyncStatus.LOCAL_ONLY)
             self.unlink_btn.pack_forget()
             self.on_save_callback(self.current_note)
+
+    def _handle_popout(self):
+        if self.is_modified:
+            self._save_note()
+        if self.current_note and self.on_popout_callback:
+            self.on_popout_callback(self.current_note)
 
     def _handle_close(self):
         """Handle close with unsaved changes check"""

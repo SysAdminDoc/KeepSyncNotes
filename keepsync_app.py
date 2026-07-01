@@ -502,8 +502,11 @@ class KeepSyncNotesApp(ctk.CTk):
             self.db,
             self.sync_engine,
             on_save=self._on_note_saved,
-            on_close=self._close_editor
+            on_close=self._close_editor,
+            on_popout=self._open_note_window,
         )
+
+        self._detached_windows: List[ctk.CTkToplevel] = []
 
     def _set_filter(self, filter_key: str):
         """Set the current filter and refresh notes"""
@@ -793,6 +796,46 @@ class KeepSyncNotesApp(ctk.CTk):
         self.empty_state.pack_forget()
         self.editor.pack(fill="both", expand=True)
         self.editor.load_note(note)
+
+    def _open_note_window(self, note: Note):
+        """Open a note in a detached window for side-by-side editing."""
+        self._close_editor()
+
+        window = ctk.CTkToplevel(self)
+        window.title(note.title.strip() or "Untitled")
+        window.geometry("700x650")
+        window.configure(fg_color=COLORS["bg_dark"])
+
+        def on_save(saved_note: Note):
+            self._refresh_notes_list()
+            self._refresh_labels()
+
+        def on_close():
+            self._detached_windows = [w for w in self._detached_windows if w is not window]
+            window.destroy()
+
+        editor = NoteEditor(
+            window,
+            self.db,
+            self.sync_engine,
+            on_save=on_save,
+            on_close=on_close,
+        )
+        editor.pack(fill="both", expand=True)
+        editor.load_note(note)
+
+        window.protocol("WM_DELETE_WINDOW", lambda: self._close_detached(editor, window))
+        self._detached_windows.append(window)
+
+    def _close_detached(self, editor: NoteEditor, window: ctk.CTkToplevel):
+        if editor.is_modified:
+            result = messagebox.askyesnocancel("Unsaved Changes", "Save changes before closing?")
+            if result is None:
+                return
+            if result:
+                editor._save_note()
+        self._detached_windows = [w for w in self._detached_windows if w is not window]
+        window.destroy()
 
     def _close_editor(self):
         """Close the editor and show empty state"""
@@ -1238,6 +1281,12 @@ class KeepSyncNotesApp(ctk.CTk):
             self.after_cancel(self._reminder_after_id)
         if self._takeout_watch_after_id:
             self.after_cancel(self._takeout_watch_after_id)
+        for window in list(self._detached_windows):
+            try:
+                window.destroy()
+            except Exception:
+                pass
+        self._detached_windows.clear()
         self.sync_engine.stop_auto_sync()
         self.cloud_sync.stop_auto_sync()
         self.db.close()

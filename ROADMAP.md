@@ -15,7 +15,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ### Export & Portability
 
 ### UX
-- **Multi-window** — open a note in its own window for side-by-side
 - **System tray** — quick-capture from tray, notification center
 - **Dark/light theme** — keep Catppuccin as default, add a light Mocha counterpart (Latte)
 
