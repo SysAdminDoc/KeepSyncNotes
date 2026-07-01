@@ -9,8 +9,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 - **Standard Notes** — end-to-end encrypted, subscription-based for rich features. Take the security model as inspiration.
 - **TiddlyWiki** — single-file personal wiki; different shape but similar "your data, your file" philosophy.
 
-## Nice-to-Haves
-
 ## Open-Source Research (Round 2)
 
 ### Related OSS Projects
@@ -43,8 +41,3 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 - gkeepapi's **auth/session persistence** — master token stored once, session tokens refreshed transparently; avoids re-login on every run
 - **Conflict resolution UI** for bi-directional mode — side-by-side diff view, pick-per-note or bulk accept-local/accept-remote
 
-## Research-Driven Additions
-
-### P0 - Correctness, Security, and Packaging
-
-### P1 - Data Safety and Maintainability
