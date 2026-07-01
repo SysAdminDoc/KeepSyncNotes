@@ -143,6 +143,7 @@ from keepsync_markdown_export import (
 )
 from keepsync_pdf_export import PdfExportResult, export_pdf_book
 from keepsync_note_editor import NoteEditor
+from keepsync_ocr import OCR_AVAILABLE, append_ocr_text, ocr_image, ocr_note_attachments
 from keepsync_note_ops import (
     advanced_filters_active,
     default_advanced_filters,

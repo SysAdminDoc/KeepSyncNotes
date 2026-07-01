@@ -11,7 +11,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 
 ## Nice-to-Haves
 - Local semantic search via `fastembed` + lancedb (already proven in Bookmark Organizer Pro)
-- OCR on imported images via Tesseract so handwritten scans are searchable
 
 ## Open-Source Research (Round 2)
 
