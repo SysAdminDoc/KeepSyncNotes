@@ -18,6 +18,8 @@ from keepsync_diagnostics import log_diagnostic_exception
 from keepsync_import_reports import IMPORT_SUCCESS_STATUSES, import_summary_lines
 from keepsync_import_safety import ImportCancelled
 from keepsync_importers import MultiSourceImporter, extract_shared_with, import_takeout_attachments
+from keepsync_markdown_export import export_markdown_vault
+from keepsync_pdf_export import export_pdf_book
 from keepsync_models import ChecklistItem, Note, NoteType, SyncStatus, normalize_keep_color
 from keepsync_note_ops import notes_equivalent
 from keepsync_paths import get_google_drive_credentials_path
@@ -505,6 +507,33 @@ class SettingsDialog(ctk.CTkToplevel):
         )
         import_btn.pack(side="left", fill="x", expand=True)
 
+        export_row2 = ctk.CTkFrame(data_frame, fg_color="transparent")
+        export_row2.pack(fill="x", padx=16, pady=(0, 16))
+
+        vault_export_btn = ctk.CTkButton(
+            export_row2,
+            text="Export Markdown Vault",
+            font=ctk.CTkFont(size=13),
+            height=40,
+            fg_color=COLORS["accent_blue"],
+            hover_color=COLORS["accent_blue_hover"],
+            text_color=COLORS["bg_darkest"],
+            command=self._export_markdown_vault
+        )
+        vault_export_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        pdf_export_btn = ctk.CTkButton(
+            export_row2,
+            text="Export PDF Book",
+            font=ctk.CTkFont(size=13),
+            height=40,
+            fg_color=COLORS["accent_blue"],
+            hover_color=COLORS["accent_blue_hover"],
+            text_color=COLORS["bg_darkest"],
+            command=self._export_pdf_book
+        )
+        pdf_export_btn.pack(side="left", fill="x", expand=True)
+
         source_frame = ctk.CTkFrame(data_frame, fg_color="transparent")
         source_frame.pack(fill="x", padx=16, pady=(0, 16))
 
@@ -946,6 +975,53 @@ for you to authorize the app."""
             with open(filepath, "w") as f:
                 json.dump(data, f, indent=2)
             messagebox.showinfo("Export Complete", f"Exported {len(notes)} notes to {filepath}")
+
+    def _export_markdown_vault(self):
+        """Export all notes as an Obsidian-compatible Markdown vault."""
+        folder = filedialog.askdirectory(title="Select Markdown vault folder")
+        if not folder:
+            return
+        target_dir = Path(folder)
+
+        def worker():
+            try:
+                notes = self.db.get_all_notes(include_trashed=True, include_archived=True)
+                result = export_markdown_vault(notes, target_dir)
+                message = (
+                    f"Exported {result.notes_exported} notes to:\n{result.output_dir}\n\n"
+                    f"Copied {result.attachments_copied} attachments."
+                )
+                if result.attachments_missing:
+                    message += f"\nMissing attachments skipped: {result.attachments_missing}"
+                self.after(0, lambda: messagebox.showinfo("Markdown Export Complete", message))
+            except Exception as e:
+                log_diagnostic_exception("markdown vault export", e)
+                self.after(0, lambda message=str(e): messagebox.showerror("Markdown Export Failed", message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _export_pdf_book(self):
+        """Export all notes as a single PDF book."""
+        filepath = filedialog.asksaveasfilename(
+            title="Save PDF Book",
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        if not filepath:
+            return
+        output_path = Path(filepath)
+
+        def worker():
+            try:
+                notes = self.db.get_all_notes(include_trashed=False, include_archived=True)
+                result = export_pdf_book(notes, output_path, title=self.app_name)
+                message = f"Exported {result.notes_exported} notes ({result.pages} pages) to:\n{result.output_path}"
+                self.after(0, lambda: messagebox.showinfo("PDF Export Complete", message))
+            except Exception as e:
+                log_diagnostic_exception("pdf book export", e)
+                self.after(0, lambda message=str(e): messagebox.showerror("PDF Export Failed", message))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _run_import_with_progress(
         self,

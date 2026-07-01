@@ -124,6 +124,12 @@ from keepsync_models import (
     sanitize_filename,
 )
 from keepsync_markdown_editing import MARKDOWN_PLACEHOLDERS, format_markdown_selection
+from keepsync_markdown_export import (
+    MarkdownVaultExportResult,
+    export_markdown_vault,
+    render_note_markdown,
+)
+from keepsync_pdf_export import PdfExportResult, export_pdf_book
 from keepsync_note_editor import NoteEditor
 from keepsync_note_ops import (
     advanced_filters_active,

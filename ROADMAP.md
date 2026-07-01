@@ -13,12 +13,9 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 ### Editor
 
 ### Export & Portability
-- **Export all to Markdown vault** — Obsidian-compatible `notes/YYYY-MM-DD-title.md` with YAML frontmatter
-- **Export to PDF book** — compile selected notes into a single PDF
 - **Encrypted backup** — AES-GCM SQLite dump with password
 
 ### UX
-- **Keyboard navigation** — j/k list nav, Enter to open, / to search, everything reachable without mouse
 - **Multi-window** — open a note in its own window for side-by-side
 - **System tray** — quick-capture from tray, notification center
 - **Dark/light theme** — keep Catppuccin as default, add a light Mocha counterpart (Latte)
