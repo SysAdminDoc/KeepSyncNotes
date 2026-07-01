@@ -10,7 +10,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 - **TiddlyWiki** — single-file personal wiki; different shape but similar "your data, your file" philosophy.
 
 ## Nice-to-Haves
-- Local semantic search via `fastembed` + lancedb (already proven in Bookmark Organizer Pro)
 
 ## Open-Source Research (Round 2)
 

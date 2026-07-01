@@ -164,6 +164,7 @@ from keepsync_note_text import (
     parse_reminder_datetime,
     split_inline_markdown,
 )
+from keepsync_semantic_search import SEMANTIC_SEARCH_AVAILABLE, SemanticIndex
 from keepsync_paths import (
     get_app_data_dir,
     get_google_drive_credentials_path,

@@ -1,6 +1,6 @@
 # KeepSyncNotes
 
-![Version](https://img.shields.io/badge/version-1.54.0-blue)
+![Version](https://img.shields.io/badge/version-1.55.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Language](https://img.shields.io/badge/language-Python-3776AB)
 ![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
@@ -43,6 +43,7 @@ Dependencies are pinned in `requirements.txt`; the app never installs packages a
 - **Deterministic Dependencies** — Pinned requirements file with no startup or runtime package installation
 - **Markdown Preview & Toolbar** — Notes tagged `.md` can switch between editable source, rendered preview, and inline formatting controls
 - **Ranked Full-Text Search** — SQLite FTS5 search across titles, bodies, checklist items, and labels
+- **Semantic Search** — Optional local vector search via fastembed + lancedb for meaning-based note discovery
 - **Advanced Filters** — Combine label, color, date range, image, checklist, and archive filters with AND/OR logic
 - **Saved Searches** — Pin query/filter combinations as reusable virtual folders, including FTS label/checklist hits and archived-note filters
 - **Hierarchical Folders** — Use slash-delimited folder labels like `Work/Clients/Acme` with a dedicated folder sidebar
