@@ -16,7 +16,6 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 
 ### UX
 - **System tray** — quick-capture from tray, notification center
-- **Dark/light theme** — keep Catppuccin as default, add a light Mocha counterpart (Latte)
 
 ## Competitive Research
 - **Google Keep native** — web + Android + iOS, auto-sync, but no bulk ops and no export beyond Takeout. KeepSyncNotes wins on local + bulk + no cloud.

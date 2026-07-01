@@ -53,7 +53,7 @@ from keepsync_paths import get_app_data_dir
 from keepsync_settings_dialog import SettingsDialog
 from keepsync_storage import DatabaseManager
 from keepsync_tag_graph import build_tag_graph, tag_graph_summary_lines
-from keepsync_theme import COLORS
+from keepsync_theme import COLORS, set_theme
 from keepsync_ui_components import IconManager, NoteCard
 from keepsync_ui_dialogs import (
     AdvancedFilterDialog,
@@ -108,6 +108,11 @@ class KeepSyncNotesApp(ctk.CTk):
         # Initialize cloud sync manager
         self.cloud_sync = CloudSyncManager(self.db, APP_NAME, APP_VERSION, DB_VERSION)
         self.cloud_sync.add_callback(self._on_cloud_sync_status_change)
+
+        # Apply saved theme before building UI
+        saved_theme = self.db.get_setting("theme", "dark")
+        if saved_theme != "dark":
+            set_theme(saved_theme)
 
         # State
         self.current_filter = "all"  # all, archived, trash, label:<name>

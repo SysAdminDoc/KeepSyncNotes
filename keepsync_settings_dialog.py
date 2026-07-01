@@ -29,7 +29,7 @@ from keepsync_models import ChecklistItem, Note, NoteType, SyncStatus, normalize
 from keepsync_note_ops import notes_equivalent
 from keepsync_paths import get_google_drive_credentials_path
 from keepsync_storage import DatabaseManager
-from keepsync_theme import COLORS
+from keepsync_theme import COLORS, get_theme_name, set_theme
 from keepsync_ui_dialogs import (
     DiagnosticsDialog,
     ImportConflictDialog,
@@ -473,6 +473,46 @@ class SettingsDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=20, weight="bold"),
             text_color=COLORS["text_primary"]
         ).pack(anchor="w", pady=(10, 15))
+
+        # Theme
+        theme_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
+        theme_frame.pack(fill="x", pady=(0, 15))
+
+        ctk.CTkLabel(
+            theme_frame,
+            text="Appearance",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+
+        self.theme_var = ctk.StringVar(value=self.db.get_setting("theme", "dark"))
+        theme_row = ctk.CTkFrame(theme_frame, fg_color="transparent")
+        theme_row.pack(fill="x", padx=16, pady=(0, 16))
+
+        ctk.CTkLabel(
+            theme_row,
+            text="Theme:",
+            font=ctk.CTkFont(size=13),
+            text_color=COLORS["text_secondary"]
+        ).pack(side="left")
+
+        theme_menu = ctk.CTkOptionMenu(
+            theme_row,
+            values=["Dark (Catppuccin Mocha)", "Light (Catppuccin Latte)"],
+            variable=self.theme_var,
+            font=ctk.CTkFont(size=12),
+            fg_color=COLORS["bg_light"],
+            button_color=COLORS["bg_hover"],
+            button_hover_color=COLORS["accent_blue"],
+            dropdown_fg_color=COLORS["bg_medium"],
+            dropdown_hover_color=COLORS["bg_hover"],
+            text_color=COLORS["text_primary"],
+            height=36,
+            command=self._on_theme_change,
+        )
+        theme_menu.pack(side="left", padx=(12, 0))
+        current = self.db.get_setting("theme", "dark")
+        theme_menu.set("Light (Catppuccin Latte)" if current == "light" else "Dark (Catppuccin Mocha)")
 
         # Export/Import
         data_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_medium"], corner_radius=12)
@@ -919,6 +959,12 @@ class SettingsDialog(ctk.CTkToplevel):
             self.destroy()
         except Exception as e:
             messagebox.showerror("Restore Failed", str(e))
+
+    def _on_theme_change(self, value: str):
+        theme = "light" if "Latte" in value else "dark"
+        self.db.set_setting("theme", theme)
+        set_theme(theme)
+        messagebox.showinfo("Theme Changed", "Restart the app to apply the new theme.")
 
     def _create_encrypted_backup(self):
         password = self._ask_password("Set Backup Password", "Enter a password to encrypt the backup:")
