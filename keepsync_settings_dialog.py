@@ -19,6 +19,11 @@ from keepsync_import_reports import IMPORT_SUCCESS_STATUSES, import_summary_line
 from keepsync_import_safety import ImportCancelled
 from keepsync_importers import MultiSourceImporter, extract_shared_with, import_takeout_attachments
 from keepsync_markdown_export import export_markdown_vault
+from keepsync_clipboard_import import (
+    CLIPBOARD_HISTORY_AVAILABLE,
+    clipboard_items_to_notes,
+    fetch_clipboard_text_items,
+)
 from keepsync_encrypted_backup import (
     create_encrypted_backup,
     read_backup_header,
@@ -617,6 +622,19 @@ class SettingsDialog(ctk.CTkToplevel):
         )
         external_btn.pack(side="left")
 
+        if CLIPBOARD_HISTORY_AVAILABLE:
+            clip_btn = ctk.CTkButton(
+                data_frame,
+                text="Import from Clipboard History",
+                font=ctk.CTkFont(size=13),
+                height=40,
+                fg_color=COLORS["bg_light"],
+                hover_color=COLORS["bg_hover"],
+                text_color=COLORS["text_primary"],
+                command=self._import_clipboard_history,
+            )
+            clip_btn.pack(fill="x", padx=16, pady=(0, 16))
+
         watcher_frame = ctk.CTkFrame(data_frame, fg_color=COLORS["bg_dark"], corner_radius=8)
         watcher_frame.pack(fill="x", padx=16, pady=(0, 16))
 
@@ -959,6 +977,33 @@ class SettingsDialog(ctk.CTkToplevel):
             self.destroy()
         except Exception as e:
             messagebox.showerror("Restore Failed", str(e))
+
+    def _import_clipboard_history(self):
+        def worker():
+            try:
+                items = fetch_clipboard_text_items(max_items=50)
+                if not items:
+                    self.after(0, lambda: messagebox.showinfo(
+                        "Clipboard History",
+                        "No text items found in clipboard history.\n\n"
+                        "Make sure clipboard history is enabled in Windows settings.",
+                    ))
+                    return
+                notes = clipboard_items_to_notes(items)
+                LocalBackupManager(self.db, self.app_name, self.app_version).create_backup("before clipboard import")
+                imported = 0
+                for note in notes:
+                    if self.db.save_imported_note(note, conflict_policy="skip") in IMPORT_SUCCESS_STATUSES:
+                        imported += 1
+                self.after(0, lambda: messagebox.showinfo(
+                    "Clipboard Import Complete",
+                    f"Imported {imported} of {len(items)} clipboard entries as notes.",
+                ))
+            except Exception as e:
+                log_diagnostic_exception("clipboard import", e)
+                self.after(0, lambda message=str(e): messagebox.showerror("Clipboard Import Failed", message))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_theme_change(self, value: str):
         theme = "light" if "Latte" in value else "dark"

@@ -33,6 +33,11 @@ from keepsync_audio_recording import (
     transcribe_audio_file,
     write_wav_file,
 )
+from keepsync_clipboard_import import (
+    CLIPBOARD_HISTORY_AVAILABLE,
+    clipboard_items_to_notes,
+    fetch_clipboard_text_items,
+)
 from keepsync_daily_review import pick_review_notes, review_summary
 from keepsync_dragdrop import drop_copy_action, enable_file_drop
 from keepsync_encrypted_backup import (

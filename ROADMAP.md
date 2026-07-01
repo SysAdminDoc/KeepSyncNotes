@@ -2,20 +2,6 @@
 
 Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Mocha). Currently imports from Takeout and provides browse/search/tag/edit, pinned notes, nested checklists, Keep color swatches, local time reminders, imported sharing metadata, and local attachment previews. Roadmap pushes toward Keep feature parity, sync, and multi-source import.
 
-## Planned Features
-
-### Note Feature Parity
-
-### Import & Sync
-
-### Search & Organization
-
-### Editor
-
-### Export & Portability
-
-### UX
-
 ## Competitive Research
 - **Google Keep native** — web + Android + iOS, auto-sync, but no bulk ops and no export beyond Takeout. KeepSyncNotes wins on local + bulk + no cloud.
 - **Joplin** — biggest OSS note tool with real sync backends. Reference for encrypted sync design.
@@ -25,10 +11,7 @@ Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Moc
 
 ## Nice-to-Haves
 - Local semantic search via `fastembed` + lancedb (already proven in Bookmark Organizer Pro)
-- LLM summarization via LlamaLink endpoint for "summarize this week's notes"
-- Android companion app (Kotlin/Compose) that reads the same SQLite over Syncthing
 - OCR on imported images via Tesseract so handwritten scans are searchable
-- Import from clipboard history (Windows WinRT, macOS NSPasteboard) for captured snippets
 
 ## Open-Source Research (Round 2)
 
