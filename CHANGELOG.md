@@ -2,6 +2,12 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.47.0] - 2026-06-30
+
+- Added Markdown vault export with YAML frontmatter, GFM checklist conversion, deduplicated note filenames, and copied attachment links.
+- Added PDF book export for selected local notes with metadata, note bodies, and checklist rendering.
+- Added Data-tab export buttons and coverage for Markdown and PDF export helpers.
+
 ## [v1.46.0] - 2026-06-30
 
 - Added inline voice-note recording that saves mono WAV attachments from the editor.
