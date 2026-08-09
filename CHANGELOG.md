@@ -2,6 +2,10 @@
 
 All notable changes to KeepSyncNotes will be documented in this file.
 
+## [v1.56.0] - 2026-08-09
+
+- Completed the current actionable roadmap and synchronized the release metadata.
+
 ## [v1.47.0] - 2026-06-30
 
 - Added Markdown vault export with YAML frontmatter, GFM checklist conversion, deduplicated note filenames, and copied attachment links.
