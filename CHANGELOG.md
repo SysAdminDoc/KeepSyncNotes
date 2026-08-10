@@ -301,3 +301,55 @@ All notable changes to KeepSyncNotes will be documented in this file.
 - Added: Add comprehensive README
 - Changed: Update keepsync_notes.py
 - Added: Add files via upload
+
+## Roadmap archive — 2026-08-10 — ROADMAP.md
+
+<details>
+<summary>Original roadmap snapshot</summary>
+
+```markdown
+# KeepSyncNotes Roadmap
+
+Google Keep importer + local note manager (CustomTkinter, SQLite, Catppuccin Mocha). Currently imports from Takeout and provides browse/search/tag/edit, pinned notes, nested checklists, Keep color swatches, local time reminders, imported sharing metadata, and local attachment previews. Roadmap pushes toward Keep feature parity, sync, and multi-source import.
+
+## Competitive Research
+- **Google Keep native** — web + Android + iOS, auto-sync, but no bulk ops and no export beyond Takeout. KeepSyncNotes wins on local + bulk + no cloud.
+- **Joplin** — biggest OSS note tool with real sync backends. Reference for encrypted sync design.
+- **Obsidian** — markdown-vault king; pairs well as an export target rather than a competitor.
+- **Standard Notes** — end-to-end encrypted, subscription-based for rich features. Take the security model as inspiration.
+- **TiddlyWiki** — single-file personal wiki; different shape but similar "your data, your file" philosophy.
+
+## Open-Source Research (Round 2)
+
+### Related OSS Projects
+- djsudduth/keep-it-markdown — https://github.com/djsudduth/keep-it-markdown — most feature-rich: bi-directional Keep ↔ markdown sync for Obsidian, Apple Notes, Logseq, Joplin, Notion
+- kiwiz/gkeepapi — https://github.com/kiwiz/gkeepapi — the unofficial Keep API every other tool wraps
+- ndbeals/keep-exporter — https://github.com/ndbeals/keep-exporter — clean CLI markdown exporter
+- vHanda/google-keep-exporter — https://github.com/vHanda/google-keep-exporter — export to markdown
+- k4j8/google-keep-takeout — https://github.com/k4j8/google-keep-takeout — uses Google Takeout data (no login required, offline-friendly)
+- bhngupta/KeepAPI — https://github.com/bhngupta/KeepAPI — thin Python wrapper example
+- usememos/memos — https://github.com/usememos/memos — 58k-star self-hosted Keep replacement; migration destination for power users
+- obsidianmd/obsidian-releases — plugin registry for "keep-to-obsidian" sync extensions worth tracking
+- Laurent22/joplin — https://github.com/laurent22/joplin — OSS note app with rich sync/import patterns to borrow
+
+### Features to Borrow
+- **Bi-directional sync, not just export** (keep-it-markdown) — edit a markdown file locally, push changes back to Keep; this is the "sync" KeepSyncNotes name implies
+- **Obsidian / Logseq / Joplin templated export** (keep-it-markdown) — target-aware front-matter, link syntax, attachment folder layout
+- **Google Takeout fallback path** (google-keep-takeout) — for users who won't hand over credentials; accept `Takeout.zip`, extract, convert
+- **Attachment sync** — download images/voice notes, rewrite links to relative paths in the exported markdown
+- **Label → tag mapping** — Keep labels become Obsidian tags / Logseq `#tags` / Joplin tags with a user-editable mapping table
+- **Checklist → GFM `- [ ]` task list** conversion — lossless round-trip (matters for bi-directional sync)
+- **Pin + color preservation as front-matter** — `pinned: true`, `color: yellow` in YAML; doesn't clutter body text, round-trips on re-import
+- **Incremental sync with last-sync timestamp** — avoid re-downloading unchanged notes; store timestamp per note ID
+- **Local SQLite cache** (Joplin-style) — offline read/edit, sync queue for when Keep API is reachable
+- **2FA/App Password handling with keyring** — gkeepapi needs an app password; use OS keyring (Windows Credential Manager / macOS Keychain) not plain config
+
+### Patterns & Architectures Worth Studying
+- keep-it-markdown's **`keep_sync()` loop** — stateless sync primitive; call returns a diff, caller decides what to apply
+- Joplin's **three-way merge** on conflicting edits (local + remote + base) — necessary for bi-directional sync; pure-export tools don't need this
+- Memos's **import adapters pattern** — one adapter per source (Keep, Notion, Evernote, Obsidian); structured pipeline rather than per-source scripts
+- gkeepapi's **auth/session persistence** — master token stored once, session tokens refreshed transparently; avoids re-login on every run
+- **Conflict resolution UI** for bi-directional mode — side-by-side diff view, pick-per-note or bulk accept-local/accept-remote
+```
+
+</details>
