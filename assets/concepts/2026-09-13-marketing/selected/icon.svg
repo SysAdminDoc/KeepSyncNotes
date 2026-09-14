@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>KeepSync Notes note relay concept</title>
+  <rect x="136" y="92" width="240" height="328" rx="48" fill="#0f172a" stroke="#07111f" stroke-width="18"/>
+  <path d="M180 218h152M180 274h116M180 330h84" fill="none" stroke="#ffffff" stroke-width="24" stroke-linecap="round"/>
+  <path d="M80 184c24-58 81-96 144-96h92" fill="none" stroke="#2563eb" stroke-width="30" stroke-linecap="round"/>
+  <path d="m288 49 54 39-54 39" fill="none" stroke="#2563eb" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M432 328c-24 58-81 96-144 96h-92" fill="none" stroke="#22c55e" stroke-width="30" stroke-linecap="round"/>
+  <path d="m224 385-54 39 54 39" fill="none" stroke="#22c55e" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>KeepSync Notes minimal flow concept</title>
+  <g stroke="#07111f" stroke-width="18" stroke-linejoin="round">
+    <rect x="78" y="104" width="244" height="304" rx="48" fill="#2563eb"/>
+    <rect x="190" y="104" width="244" height="304" rx="48" fill="#22c55e"/>
+  </g>
+  <g fill="none" stroke="#ffffff" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M126 212h230"/>
+    <path d="m330 176 44 36-44 36"/>
+    <path d="M386 300H156"/>
+    <path d="m182 264-44 36 44 36"/>
+  </g>
+</svg>

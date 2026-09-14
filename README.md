@@ -1,97 +1,99 @@
-# KeepSyncNotes
+![KeepSync Notes turns a Google Takeout archive into a private local note library](assets/marketing/hero.png)
 
-![Version](https://img.shields.io/badge/version-1.56.0-blue)
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Language](https://img.shields.io/badge/language-Python-3776AB)
-![Type](https://img.shields.io/badge/type-Desktop%20App-brightgreen)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+# KeepSync Notes
 
-<p align="center">
-  <a href="https://ko-fi.com/X8K126YVER">
-    <img height="42" src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy me a coffee on Ko-fi" />
-  </a>
-</p>
+[![Version](https://img.shields.io/badge/version-1.56.1-2563eb)](https://github.com/SysAdminDoc/KeepSyncNotes/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.10%2B-3776ab)
+![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0f172a)
 
-<p align="center">
-  <sub><em>If this project helps you, a coffee helps me keep working on it.</em></sub>
-</p>
+KeepSync Notes turns exported notes into a fast local library you can search, edit, back up, and move somewhere else. Google Takeout is the easiest way in. It also understands several common note formats, including ENEX and Obsidian vaults.
 
-A Google Keep importer and note management desktop app. Import your entire Google Keep library from a Takeout export, then browse, search, tag, and manage your notes locally with a dark-themed CustomTkinter interface and no cloud dependency.
+Your library lives in a local SQLite database. Nothing uploads unless you choose and configure a cloud backup provider.
 
-## Quick Start
+## See the real app
+
+![KeepSync Notes library and editor with a clearly labeled sample workspace](assets/marketing/screenshots/library-and-editor.png)
+
+The three-panel workspace keeps folders, search results, and the active editor visible together. This capture comes from the real Windows app with sample notes made for the screenshot.
+
+![KeepSync Notes data screen with import, export, and backup controls](assets/marketing/screenshots/import-export-and-backup.png)
+
+Imports, portable exports, encrypted backups, and appearance settings stay in one place.
+
+## Why people use it
+
+- Leave Google Keep without flattening everything into a pile of text files. Takeout imports preserve labels, checklists, colors, pins, reminders, attachments, and archive state.
+- Find old material quickly with SQLite full-text search, saved searches, folders, filters, and an optional local semantic index.
+- Keep a clean exit route. Export a Markdown vault or PDF book whenever you need one.
+- Back up locally with versioned snapshots or password-protected AES-256-GCM archives. Google Drive and private GitHub backup are optional.
+
+## Supported workflows
+
+| Bring notes in | Work locally | Take notes out |
+| --- | --- | --- |
+| Google Keep Takeout ZIP or folder | Text notes and nested checklists | Markdown vault with attachments |
+| Evernote or Apple Notes ENEX | Labels, folders, colors, pins, and reminders | PDF book |
+| Standard Notes, Bear, or Simplenote exports | Attachments, image OCR, and voice notes | JSON export |
+| Obsidian vaults, OneNote HTML, or Windows clipboard history | Ranked search, daily review, and tag relationships | Encrypted backup |
+
+Re-imports are delta aware, so unchanged notes are skipped. When two versions differ, KeepSync Notes can show the conflict and let you keep either copy or merge them.
+
+## Install on Windows
+
+Download the current Windows package from [Releases](https://github.com/SysAdminDoc/KeepSyncNotes/releases/latest), extract it, and run `KeepSyncNotes.exe`. The app carries its Python runtime and doesn't install packages when it starts.
+
+## Run from source
+
+Python 3.10 or newer is required.
 
 ```powershell
+git clone https://github.com/SysAdminDoc/KeepSyncNotes.git
+cd KeepSyncNotes
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 .\.venv\Scripts\python keepsync_notes.py
 ```
 
-Dependencies are pinned in `requirements.txt`; the app never installs packages at runtime.
+On macOS or Linux, replace the last two commands with `.venv/bin/python`.
 
-## Features
+## Import Google Keep
 
-- **Google Keep Import** — Import notes from a Google Takeout `.zip` or extracted JSON folder
-- **Auto-Import Watcher** — Watch a local folder for new Google Takeout ZIPs or extracted Keep folders
-- **Import Conflict Resolution** — Review diffs and keep local, use imported, or merge duplicates during foreground imports
-- **Delta-Aware Imports** — Re-import newer exports without duplicating unchanged notes
-- **Import Fidelity Reports** — Summarize imported notes, checklists, attachments, labels, reminders, archive/trash state, sharing, skipped notes, failures, and conflicts
-- **Multi-Source Import** — Import ENEX, Standard Notes ZIP, Obsidian vaults, Bear ZIP, Simplenote exports, OneNote HTML folders, and Windows clipboard history
-- **Guarded Bulk Imports** — ZIP and folder imports enforce size/member limits, path traversal checks, extension allowlists, and cancellation
-- **Versioned Local Backups** — Automatic DB/attachment snapshots before imports and syncs, plus manual backup restore from the Data tab
-- **Diagnostics Panel** — In-app dependency/path/error report backed by a local crash and diagnostics log file
-- **Cloud Conflict Planning** — Google Drive and GitHub sync report create/update/delete/conflict counts and preserve remote conflict copies
-- **Checklist Notes** — Create nested checklist items, reorder rows, and preserve checked states
-- **Keep Colors & Pins** — Preserve Keep note colors, show color swatches in cards, and pin notes to the top
-- **Reminders** — Store local date/time reminders, optional location context, and desktop notifications when available
-- **Sharing Metadata** — Preserve imported "shared with" collaborator metadata without re-sharing notes
-- **Attachments** — Copy imported and editor-added media locally, paste or drag/drop images into notes, and show image thumbnails inline
-- **Voice Notes** — Record WAV voice notes in the editor and append local Whisper transcripts inline
-- **Image OCR** — Optional Tesseract-based text extraction from image attachments for searchability
-- **Portable Exports** — Export all notes as an Obsidian-style Markdown vault or a single PDF book
-- **Encrypted Backup** — AES-256-GCM encrypted SQLite dump with a user password (PBKDF2-SHA256 key derivation)
-- **OS Keyring Credentials** — Keep, Google Drive, and GitHub sync secrets are stored in the platform credential store with legacy plaintext cleanup
-- **Deterministic Dependencies** — Pinned requirements file with no startup or runtime package installation
-- **Markdown Preview & Toolbar** — Notes tagged `.md` can switch between editable source, rendered preview, and inline formatting controls
-- **Ranked Full-Text Search** — SQLite FTS5 search across titles, bodies, checklist items, and labels
-- **Semantic Search** — Optional local vector search via fastembed + lancedb for meaning-based note discovery
-- **Advanced Filters** — Combine label, color, date range, image, checklist, and archive filters with AND/OR logic
-- **Saved Searches** — Pin query/filter combinations as reusable virtual folders, including FTS label/checklist hits and archived-note filters
-- **Hierarchical Folders** — Use slash-delimited folder labels like `Work/Clients/Acme` with a dedicated folder sidebar
-- **Daily Review** — Surface 3 random old notes for memory refresh, Anki-style, with shuffle and open
-- **Tag Graph** — Inspect label co-occurrence counts and shared-label relationships across your notes
-- **Multi-Window Editing** — Pop out any note into its own window for side-by-side comparison
-- **Accessible Modals** — Custom dialogs consistently manage modal focus, Escape handling, close behavior, and focus return
-- **Tag & Label System** — Filter notes by the labels synced from Google Keep
-- **Note Editor** — Create, edit, and delete notes locally after import
-- **Archive & Trash Views** — Mirrors the Google Keep archived and trashed note states
-- **Undoable Trash** — Move notes to trash with an inline Undo action; permanent deletes create a local safety backup first
-- **System Tray** — Background tray icon with quick-capture, show/hide, and quit actions
-- **Local Storage** — All data stored in a local SQLite database — nothing leaves your machine
-- **Dark & Light Themes** — Catppuccin Mocha (dark, default) and Catppuccin Latte (light) with a toggle in Settings
+1. Open [Google Takeout](https://takeout.google.com) and select Keep.
+2. Download the export as a ZIP file.
+3. Open **Settings**, choose **Data**, then select the Takeout ZIP or extracted Keep folder.
+4. Review the import report before working with the new library.
 
-## Usage
+You can also point the auto-import watcher at a folder where new Takeout downloads arrive.
 
-### Importing from Google Takeout
+## Privacy and storage
 
-1. Go to [Google Takeout](https://takeout.google.com) and export **Keep** data
-2. Download the `.zip` archive
-3. In KeepSyncNotes, click **Import** and point to the `.zip` or extracted `Takeout/Keep/` folder
-4. All notes, labels, and archive states are imported automatically
+- Notes and attachments stay under the platform application data directory.
+- Keep, Google Drive, and GitHub credentials go into the operating system keyring.
+- Cloud backup is off until you configure it.
+- Permanent deletion creates a local safety backup first.
 
-### Searching Notes
+## Optional tools
 
-Type in the search bar to filter notes in real time. Searches title and body text.
+Image OCR uses a local Tesseract installation. Semantic search needs `fastembed` and `lancedb`, which are intentionally optional. Voice transcription runs through faster-whisper and may download the selected speech model the first time you use it.
 
-### Managing Notes
+## Test and package
 
-Right-click any note for options: Edit, Archive, Delete, or copy text to clipboard.
+```powershell
+.\.venv\Scripts\python -m unittest discover -s tests -v
+.\packaging\build_release.ps1
+```
 
-## Requirements
+The release builder creates a windowed one-file executable, a ZIP package, and SHA-256 checksums in `dist`.
 
-- Python 3.10+
-- `python -m pip install -r requirements.txt`
-- Windows / macOS / Linux
+## Support development
+
+If KeepSync Notes earns a spot in your workflow, a coffee helps fund maintenance and future releases.
+
+<a href="https://ko-fi.com/X8K126YVER">
+  <img height="42" src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy me a coffee on Ko-fi" />
+</a>
 
 ## License
 
-MIT License
+[MIT](LICENSE)

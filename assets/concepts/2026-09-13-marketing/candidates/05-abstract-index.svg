@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>KeepSync Notes abstract index concept</title>
+  <g fill="none" stroke="#07111f" stroke-width="18" stroke-linejoin="round">
+    <path d="M92 148h328v216H92z" fill="#0f172a"/>
+    <path d="M124 110h264v38H124z" fill="#2563eb"/>
+    <path d="M124 364h264v38H124z" fill="#22c55e"/>
+  </g>
+  <path d="M150 215h212M150 297h212" fill="none" stroke="#ffffff" stroke-width="28" stroke-linecap="round"/>
+  <circle cx="198" cy="215" r="34" fill="#2563eb" stroke="#ffffff" stroke-width="14"/>
+  <circle cx="314" cy="297" r="34" fill="#22c55e" stroke="#ffffff" stroke-width="14"/>
+</svg>

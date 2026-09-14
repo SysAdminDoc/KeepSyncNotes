@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>KeepSync Notes orbit emblem concept</title>
+  <rect x="155" y="119" width="202" height="274" rx="42" fill="#0f172a" stroke="#07111f" stroke-width="16"/>
+  <path d="M196 196h120M196 248h92M196 300h70" fill="none" stroke="#ffffff" stroke-width="22" stroke-linecap="round"/>
+  <path d="M100 208c20-84 106-136 190-116 38 9 69 29 93 56" fill="none" stroke="#2563eb" stroke-width="30" stroke-linecap="round"/>
+  <path d="m360 91 34 68-74-2" fill="#2563eb" stroke="#07111f" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M412 304c-20 84-106 136-190 116-38-9-69-29-93-56" fill="none" stroke="#22c55e" stroke-width="30" stroke-linecap="round"/>
+  <path d="m152 421-34-68 74 2" fill="#22c55e" stroke="#07111f" stroke-width="12" stroke-linejoin="round"/>
+</svg>

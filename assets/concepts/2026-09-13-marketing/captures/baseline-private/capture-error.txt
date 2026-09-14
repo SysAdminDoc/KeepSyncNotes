@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "C:\repos\KeepSyncNotes\tools\capture_marketing.py", line 279, in main
+    for path in runner(args.output_dir.resolve()):
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\repos\KeepSyncNotes\tools\capture_marketing.py", line 200, in _capture_child
+    _capture_window(app_hwnd, library_path)
+  File "C:\repos\KeepSyncNotes\tools\capture_marketing.py", line 151, in _capture_window
+    memory_dc.BitBlt((0, 0), (width, height), source_dc, (left, top), win32con.SRCCOPY)
+win32ui.error: BitBlt failed

@@ -51,6 +51,7 @@ from keepsync_note_ops import (
     note_matches_advanced_filters,
 )
 from keepsync_paths import get_app_data_dir
+from keepsync_resources import apply_window_icon
 from keepsync_settings_dialog import SettingsDialog
 from keepsync_storage import DatabaseManager
 from keepsync_tag_graph import build_tag_graph, tag_graph_summary_lines
@@ -84,6 +85,7 @@ class KeepSyncNotesApp(ctk.CTk):
         self.geometry("1200x800")
         self.minsize(900, 600)
         self.configure(fg_color=COLORS["bg_darkest"])
+        icon_error = apply_window_icon(self)
 
         # Set up data directory
         self.data_dir = get_app_data_dir()
@@ -101,6 +103,8 @@ class KeepSyncNotesApp(ctk.CTk):
         set_diagnostics_manager(self.diagnostics)
         self.diagnostics.install_hooks()
         self.diagnostics.log_event("info", f"Started {APP_NAME} v{APP_VERSION}")
+        if icon_error:
+            self.diagnostics.log_event("warning", f"Could not apply window icon: {icon_error}")
 
         # Initialize database and sync engine
         self.db = DatabaseManager(str(self.data_dir / "notes.db"))

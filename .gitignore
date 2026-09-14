@@ -15,6 +15,11 @@ CLAUDE.md
 # Markdown files local-only (except README)
 *.md
 !README.md
+!CHANGELOG.md
+!LOGO_PROMPTS.md
+!ROADMAP.md
+!Roadmap_Blocked.md
+!assets/**/*.md
 
 # AI config
 CODEX_CHANGELOG.md

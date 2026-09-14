@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Compatibility entry point for KeepSync Notes."""
 
+import multiprocessing
+
+multiprocessing.freeze_support()
+
 import sys
 
 import customtkinter as ctk

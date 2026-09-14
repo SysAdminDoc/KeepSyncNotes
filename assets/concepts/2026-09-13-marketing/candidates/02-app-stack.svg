@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>KeepSync Notes app stack concept</title>
+  <path d="M114 76h220l80 80v280H114z" fill="#2563eb" stroke="#07111f" stroke-width="18" stroke-linejoin="round"/>
+  <path d="M334 76v80h80" fill="#60a5fa" stroke="#07111f" stroke-width="18" stroke-linejoin="round"/>
+  <rect x="178" y="190" width="258" height="236" rx="42" fill="#0f172a" stroke="#07111f" stroke-width="18"/>
+  <path d="m228 310 54 54 110-122" fill="none" stroke="#22c55e" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

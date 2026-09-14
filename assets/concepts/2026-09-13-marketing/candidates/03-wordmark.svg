@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360">
+  <title>KeepSync Notes wordmark concept</title>
+  <g transform="translate(24 18) scale(.63)">
+    <g stroke="#07111f" stroke-width="18" stroke-linejoin="round">
+      <rect x="78" y="104" width="244" height="304" rx="48" fill="#2563eb"/>
+      <rect x="190" y="104" width="244" height="304" rx="48" fill="#22c55e"/>
+    </g>
+    <g fill="none" stroke="#ffffff" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M126 212h230"/><path d="m330 176 44 36-44 36"/>
+      <path d="M386 300H156"/><path d="m182 264-44 36 44 36"/>
+    </g>
+  </g>
+  <text x="350" y="216" fill="#0f172a" font-family="Segoe UI, Arial, sans-serif" font-size="128" font-weight="750" letter-spacing="-5">Keep</text>
+  <text x="640" y="216" fill="#16a34a" font-family="Segoe UI, Arial, sans-serif" font-size="128" font-weight="750" letter-spacing="-5">Sync</text>
+  <text x="930" y="216" fill="#0f172a" font-family="Segoe UI, Arial, sans-serif" font-size="128" font-weight="650" letter-spacing="-5">Notes</text>
+</svg>

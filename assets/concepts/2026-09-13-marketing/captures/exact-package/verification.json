@@ -1,0 +1,13 @@
+{
+  "executable": "KeepSyncNotes.exe",
+  "sha256": "04cc94f88bfbee0df8caf0fd818e626f99744dc18a6e0bc803a0d51c651381dd",
+  "fileVersion": "1.56.1",
+  "windowTitle": "KeepSync Notes",
+  "screenshot": "packaged-library.png",
+  "screenshotDimensions": [
+    1518,
+    1047
+  ],
+  "sampleDataLabel": "Sample workspace",
+  "desktopIsolation": "named private Windows desktop"
+}
